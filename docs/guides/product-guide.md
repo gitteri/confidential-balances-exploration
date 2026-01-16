@@ -136,19 +136,6 @@ flowchart TB
 
 ### Quick Test Methods
 
-#### Method 1: Token CLI (Beginner)
-
-```bash
-# Use the provided shell script for an end-to-end demo
-curl -sSf https://raw.githubusercontent.com/solana-program/token-2022/main/clients/cli/examples/confidential-transfer.sh | bash
-```
-
-**Features:**
-- All basic functionality to operate a confidential token
-- Fixed set of operations from the CLI menu
-
-#### Method 2: Cookbook Examples (Intermediate)
-
 Clone the [Confidential Balances Sample](https://github.com/solana-developers/Confidential-Balances-Sample) repository.
 
 **Features:**
