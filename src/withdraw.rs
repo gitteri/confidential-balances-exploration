@@ -32,6 +32,7 @@ use spl_token_2022::{
 /// These proofs can fit inline in the transaction for small amounts.
 pub async fn withdraw_from_confidential(
     client: &RpcClient,
+    payer: &dyn Signer,
     authority: &dyn Signer,
     mint: &solana_sdk::pubkey::Pubkey,
     amount: u64,
@@ -106,8 +107,8 @@ pub async fn withdraw_from_confidential(
     let recent_blockhash = client.get_latest_blockhash()?;
     let transaction = Transaction::new_signed_with_payer(
         &withdraw_instructions,
-        Some(&authority.pubkey()),
-        &[authority],
+        Some(&payer.pubkey()),
+        &[payer, authority],
         recent_blockhash,
     );
 

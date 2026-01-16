@@ -73,7 +73,21 @@ fn get_balances(
     println!("🔑 Derived encryption keys from owner signature");
 
     // Fetch account data
-    let account_data = client.get_account(&token_account)?;
+    let account_data = match client.get_account(&token_account) {
+        Ok(data) => data,
+        Err(e) => {
+            eprintln!("\n❌ Error fetching token account: {}", e);
+            eprintln!("\nPossible reasons:");
+            eprintln!("  1. Token account doesn't exist yet");
+            eprintln!("  2. Wrong mint address");
+            eprintln!("  3. Wrong owner keypair");
+            eprintln!("  4. Account not configured for this mint");
+            eprintln!("\nTo create a token account:");
+            eprintln!("  spl-token create-account {} --owner {}", mint, owner.pubkey());
+            return Err(e.into());
+        }
+    };
+
     let account = StateWithExtensions::<TokenAccount>::unpack(&account_data.data)?;
 
     println!("\n📦 Account info:");
@@ -148,17 +162,17 @@ fn get_balances(
 fn display_balances(balances: &BalanceBreakdown, decimals: u8) {
     let divisor = 10_u64.pow(decimals as u32) as f64;
 
-    println!("\n╔═══════════════════════════════════════════════════╗");
-    println!("║           BALANCE BREAKDOWN                       ║");
-    println!("╠═══════════════════════════════════════════════════╣");
-    println!("║                                                   ║");
-    println!("║  Public Balance:    {:>12.9} tokens       ║", balances.public as f64 / divisor);
-    println!("║  Pending Balance:   {:>12.9} tokens       ║", balances.pending as f64 / divisor);
-    println!("║  Available Balance: {:>12.9} tokens       ║", balances.available as f64 / divisor);
-    println!("║  ─────────────────────────────────────────────  ║");
-    println!("║  Total:             {:>12.9} tokens       ║", balances.total as f64 / divisor);
-    println!("║                                                   ║");
-    println!("╚═══════════════════════════════════════════════════╝");
+    println!("\n╔══════════════════════════════════════════╗");
+    println!("║           BALANCE BREAKDOWN              ║");
+    println!("╠══════════════════════════════════════════╣");
+    println!("║                                          ║");
+    println!("║  Public Balance:    {:>12.9} tokens  ║", balances.public as f64 / divisor);
+    println!("║  Pending Balance:   {:>12.9} tokens  ║", balances.pending as f64 / divisor);
+    println!("║  Available Balance: {:>12.9} tokens  ║", balances.available as f64 / divisor);
+    println!("║  ──────────────────────────────────────  ║");
+    println!("║  Total:             {:>12.9} tokens  ║", balances.total as f64 / divisor);
+    println!("║                                          ║");
+    println!("╚══════════════════════════════════════════╝");
 
     println!("\n📝 Balance Types Explained:");
     println!("   • Public:    Visible to everyone on-chain");

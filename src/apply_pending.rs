@@ -33,6 +33,7 @@ use spl_token_2022::{
 /// - Encrypting new balance with AES for efficient owner viewing
 pub async fn apply_pending_balance(
     client: &RpcClient,
+    payer: &dyn Signer,
     authority: &dyn Signer,
     mint: &solana_sdk::pubkey::Pubkey,
 ) -> SigResult {
@@ -99,8 +100,8 @@ pub async fn apply_pending_balance(
     let recent_blockhash = client.get_latest_blockhash()?;
     let transaction = Transaction::new_signed_with_payer(
         &[apply_ix],
-        Some(&authority.pubkey()),
-        &[authority],
+        Some(&payer.pubkey()),
+        &[payer, authority],
         recent_blockhash,
     );
 

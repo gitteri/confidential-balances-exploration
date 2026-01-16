@@ -122,10 +122,8 @@ SOLANA_RPC_URL=https://zk-edge.surfnet.dev:8899 \
 PAYER_KEYPAIR=$(cat ~/.config/solana/id.json) \
 cargo run --example run_transfer
 
-# Query and display encrypted balances (using args)
-cargo run --example get_balances -- <MINT_ADDRESS> <OWNER_KEYPAIR_PATH>
-
-# Or using environment variables
+# Query and display encrypted balances
+SOLANA_RPC_URL=https://zk-edge.surfnet.dev:8899 \
 MINT_ADDRESS=<mint> \
 OWNER_KEYPAIR=$(cat ~/.config/solana/id.json) \
 cargo run --example get_balances

@@ -118,31 +118,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("💳 Balance: {} SOL", client.get_balance(&payer.pubkey())? as f64 / LAMPORTS_PER_SOL as f64);
 
     // Create user accounts
-    let sender = Keypair::new();
+    let sender = &payer;
     let recipient = Keypair::new();
 
     println!("\n📋 Setting up accounts...");
     println!("  Sender: {}", sender.pubkey());
     println!("  Recipient: {}", recipient.pubkey());
-
-    // Fund sender and recipient with SOL for transaction fees
-    {
-        use solana_system_interface::instruction as system_instruction;
-        use solana_sdk::transaction::Transaction;
-
-        let transfer_sender_ix = system_instruction::transfer(&payer.pubkey(), &sender.pubkey(), 100_000_000); // 0.1 SOL
-        let transfer_recipient_ix = system_instruction::transfer(&payer.pubkey(), &recipient.pubkey(), 100_000_000); // 0.1 SOL
-
-        let recent_blockhash = client.get_latest_blockhash()?;
-        let transaction = Transaction::new_signed_with_payer(
-            &[transfer_sender_ix, transfer_recipient_ix],
-            Some(&payer.pubkey()),
-            &[&payer],
-            recent_blockhash,
-        );
-        client.send_and_confirm_transaction(&transaction)?;
-        println!("✅ Funded sender and recipient accounts");
-    }
 
     // Create confidential mint
     println!("\n🏭 Creating confidential mint...");
@@ -277,12 +258,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Deposit to confidential
     println!("\n💰 Depositing to confidential balance...");
-    deposit::deposit_to_confidential(&client, &sender, &mint.pubkey(), 800_000_000, 9).await?;
+    deposit::deposit_to_confidential(&client, &payer, &sender, &mint.pubkey(), 800_000_000, 9).await?;
     display_balances(&client, "Sender (after deposit)", &sender, &mint.pubkey(), 9)?;
 
     // Apply pending
     println!("\n🔄 Applying pending balance...");
-    apply_pending::apply_pending_balance(&client, &sender, &mint.pubkey()).await?;
+    apply_pending::apply_pending_balance(&client, &payer, &sender, &mint.pubkey()).await?;
     display_balances(&client, "Sender (after apply)", &sender, &mint.pubkey(), 9)?;
 
     // Transfer confidentially
@@ -309,7 +290,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Recipient applies pending balance
     println!("\n🔄 Recipient applying pending balance...");
-    apply_pending::apply_pending_balance(&client, &recipient, &mint.pubkey()).await?;
+    apply_pending::apply_pending_balance(&client, &payer, &recipient, &mint.pubkey()).await?;
     display_balances(&client, "Recipient (after apply)", &recipient, &mint.pubkey(), 9)?;
 
     println!("\n📝 Transaction signatures:");
@@ -319,6 +300,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("\n🔗 View on explorer:");
     println!("   https://explorer.solana.com/tx/{}?cluster=custom&customUrl=https%3A%2F%2Fzk-edge.surfnet.dev%3A8899", signatures[3]);
+
+    println!("\n📋 Account Addresses (for querying balances):");
+    println!("   Mint:                   {}", mint.pubkey());
+    println!("   Sender token account:   {}", sender_token_account);
+    println!("   Recipient token account: {}", recipient_token_account);
+    println!("\n💡 Query balances with:");
+    println!("   MINT_ADDRESS={} OWNER_KEYPAIR=</path/to/owner/keypair.json> cargo run --example get_balances", mint.pubkey());
 
     Ok(())
 }
