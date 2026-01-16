@@ -26,6 +26,10 @@ tokio = { version = "1", features = ["full"] }
 # Commitment config
 solana-commitment-config = "3.1.0"
 
+# Utilities
+hex = "0.4"
+serde_json = "1.0"
+
 [dev-dependencies]
 # Test utilities
 # solana-test-validator = "3.1.6"  # Temporarily disabled due to version conflicts

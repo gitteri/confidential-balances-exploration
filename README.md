@@ -58,7 +58,8 @@ Confidential transfers require zero-knowledge proofs verified by a dedicated Sol
 │   ├── withdraw.rs                 # Withdraw from confidential to public
 │   └── transfer.rs                 # Confidential transfer between accounts
 ├── examples/
-│   └── run_transfer.rs             # End-to-end transfer example
+│   ├── run_transfer.rs             # End-to-end transfer with balance display
+│   └── get_balances.rs             # Query and decrypt all balance types
 ├── tests/
 │   ├── integration_test.rs         # Integration tests for all operations
 │   └── common/                     # Test utilities
@@ -115,6 +116,19 @@ cargo test --test integration_test
 
 # Run a specific test
 cargo test test_confidential_transfer_between_accounts -- --nocapture
+
+# Run end-to-end transfer example (shows balance changes throughout)
+SOLANA_RPC_URL=https://zk-edge.surfnet.dev:8899 \
+PAYER_KEYPAIR=$(cat ~/.config/solana/id.json) \
+cargo run --example run_transfer
+
+# Query and display encrypted balances (using args)
+cargo run --example get_balances -- <MINT_ADDRESS> <OWNER_KEYPAIR_PATH>
+
+# Or using environment variables
+MINT_ADDRESS=<mint> \
+OWNER_KEYPAIR=$(cat ~/.config/solana/id.json) \
+cargo run --example get_balances
 ```
 
 **Available Operations:**
@@ -123,6 +137,10 @@ cargo test test_confidential_transfer_between_accounts -- --nocapture
 - `src/apply_pending.rs` - Apply pending balance to available balance
 - `src/withdraw.rs` - Withdraw from confidential to public balance
 - `src/transfer.rs` - Transfer confidentially between accounts (with proof context state accounts)
+
+**Examples:**
+- `examples/run_transfer.rs` - Complete end-to-end transfer with balance display at each step
+- `examples/get_balances.rs` - Query and decrypt all balance types (public, pending, available)
 
 All operations are tested in `tests/integration_test.rs` with complete end-to-end flows.
 
