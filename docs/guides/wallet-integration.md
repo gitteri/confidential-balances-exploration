@@ -69,7 +69,7 @@ fn derive_encryption_keys(
 
 1. **Deterministic Derivation** - Same signature always produces same keys
 2. **Key Storage** - Either derive on-the-fly or store encrypted locally
-3. **Never Transmit** - Keys must never leave the client/backend
+3. **Never Transmit** - Keys must never be shared with unauthorized parties
 4. **Backup Critical** - Loss of keys = permanent loss of confidential balance
 
 ## Balance Display
@@ -210,7 +210,7 @@ See `src/transfer.rs` for the full implementation. Key steps:
 2. **Generate ZK proofs** for the transfer
 3. **Create proof context state accounts** (3 transactions)
 4. **Execute transfer** (1 transaction)
-5. **Close proof accounts** (3 transactions)
+5. **Close proof accounts** (3 instructions)
 
 ```rust
 use crate::transfer::transfer_confidential;
@@ -298,21 +298,21 @@ async fn auto_apply_pending(
 ### 1. Balance Display
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    BALANCE DISPLAY                          │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
+┌────────────────────────────────────────────────────────────┐
+│                    BALANCE DISPLAY                         │
+├────────────────────────────────────────────────────────────┤
+│                                                            │
 │  Token: USDC (Confidential)                                │
-│                                                             │
+│                                                            │
 │  Available Balance:     1,234.56 USDC                      │
 │  Pending Balance:         100.00 USDC  [Apply]             │
 │  Public Balance:           50.00 USDC                      │
 │  ─────────────────────────────────────                     │
 │  Total:                 1,384.56 USDC                      │
-│                                                             │
+│                                                            │
 │  [Deposit] [Withdraw] [Transfer]                           │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
+│                                                            │
+└────────────────────────────────────────────────────────────┘
 ```
 
 ### 2. Transaction Signing
@@ -320,21 +320,21 @@ async fn auto_apply_pending(
 Present multi-tx operations as single action:
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                  CONFIRM TRANSFER                           │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
+┌────────────────────────────────────────────────────────────┐
+│                  CONFIRM TRANSFER                          │
+├────────────────────────────────────────────────────────────┤
+│                                                            │
 │  Sending:     100.00 USDC                                  │
-│  To:          Bob.sol                                       │
+│  To:          Bob.sol                                      │
 │  Type:        Confidential Transfer                        │
-│                                                             │
+│                                                            │
 │  ⚠️  This will require 7 transaction signatures            │
-│                                                             │
+│                                                            │
 │  Estimated fees: ~0.01 SOL                                 │
-│                                                             │
+│                                                            │
 │            [Cancel]        [Confirm & Sign All]            │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
+│                                                            │
+└────────────────────────────────────────────────────────────┘
 ```
 
 ### 3. Error Handling
