@@ -130,18 +130,45 @@ flowchart TB
 
 ### Prerequisites
 
-- Solana development environment or Solana CLI
-- solana-cli 2.1.13+ (with Agave)
-- spl-token-cli 5.1.0+
+- Solana CLI 2.1.13+ (`solana --version`)
+- SPL Token CLI 5.1.0+ (`spl-token --version`)
+- Rust 1.70+
 
-### Quick Test Methods
+### Running the Examples
 
-Clone the [Confidential Balances Sample](https://github.com/solana-developers/Confidential-Balances-Sample) repository.
+This repository includes a complete Rust implementation of all confidential transfer operations.
 
-**Features:**
-- Full Rust implementation
-- Examples with Turnkey and Google KMS signing
-- Extended operations with easy customization
+```bash
+# Start local test validator
+solana-test-validator --quiet --reset &
+
+# Run all integration tests
+cargo test --test integration_test
+
+# Run end-to-end transfer example (shows balance changes throughout)
+SOLANA_RPC_URL=https://zk-edge.surfnet.dev:8899 \
+PAYER_KEYPAIR=$(cat ~/.config/solana/id.json) \
+cargo run --example run_transfer
+
+# Query and display encrypted balances
+SOLANA_RPC_URL=https://zk-edge.surfnet.dev:8899 \
+MINT_ADDRESS=<mint> \
+OWNER_KEYPAIR=$(cat ~/.config/solana/id.json) \
+cargo run --example get_balances
+```
+
+**Available Examples:**
+- `examples/run_transfer.rs` - Complete end-to-end transfer with balance display at each step
+- `examples/get_balances.rs` - Query and decrypt all balance types (public, pending, available)
+
+**Source Operations:**
+- `src/configure.rs` - Configure token accounts for confidential transfers
+- `src/deposit.rs` - Deposit from public to confidential balance
+- `src/apply_pending.rs` - Apply pending balance to available balance
+- `src/withdraw.rs` - Withdraw from confidential to public balance
+- `src/transfer.rs` - Transfer confidentially between accounts
+
+All operations are tested in `tests/integration_test.rs` with complete end-to-end flows.
 
 ## Core Operations
 
