@@ -99,6 +99,7 @@ async fn test_deposit_and_apply_pending() {
     let deposit_amount = 500_000_000u64; // 0.5 tokens
     let deposit_result = deposit::deposit_to_confidential(
         &env.client,
+        &env.payer,
         &user,
         &mint.pubkey(),
         deposit_amount,
@@ -110,6 +111,7 @@ async fn test_deposit_and_apply_pending() {
     // Apply pending balance
     let apply_result = apply_pending::apply_pending_balance(
         &env.client,
+        &env.payer,
         &user,
         &mint.pubkey(),
     ).await;
@@ -161,6 +163,7 @@ async fn test_full_flow_deposit_apply_withdraw() {
     let deposit_amount = 800_000_000u64; // 0.8 tokens
     deposit::deposit_to_confidential(
         &env.client,
+        &env.payer,
         &user,
         &mint.pubkey(),
         deposit_amount,
@@ -170,6 +173,7 @@ async fn test_full_flow_deposit_apply_withdraw() {
     // Step 2: Apply pending balance
     apply_pending::apply_pending_balance(
         &env.client,
+        &env.payer,
         &user,
         &mint.pubkey(),
     ).await.expect("Failed to apply pending balance");
@@ -180,6 +184,7 @@ async fn test_full_flow_deposit_apply_withdraw() {
     let withdraw_amount = 100_000_000u64; // 0.1 tokens (smaller amount to fit in transaction)
     let withdraw_result = withdraw::withdraw_from_confidential(
         &env.client,
+        &env.payer,
         &user,
         &mint.pubkey(),
         withdraw_amount,
@@ -249,6 +254,7 @@ async fn test_multiple_deposits_and_applies() {
 
         deposit::deposit_to_confidential(
             &env.client,
+            &env.payer,
             &user,
             &mint.pubkey(),
             deposit_amount,
@@ -257,6 +263,7 @@ async fn test_multiple_deposits_and_applies() {
 
         apply_pending::apply_pending_balance(
             &env.client,
+            &env.payer,
             &user,
             &mint.pubkey(),
         ).await.expect(&format!("Failed to apply pending iteration {}", i));
@@ -322,6 +329,7 @@ async fn test_confidential_transfer_between_accounts() {
     let deposit_amount = 800_000_000u64; // 0.8 tokens
     deposit::deposit_to_confidential(
         &env.client,
+        &env.payer,
         &sender,
         &mint.pubkey(),
         deposit_amount,
@@ -331,6 +339,7 @@ async fn test_confidential_transfer_between_accounts() {
     // Step 2: Sender applies pending balance
     apply_pending::apply_pending_balance(
         &env.client,
+        &env.payer,
         &sender,
         &mint.pubkey(),
     ).await.expect("Failed to apply pending balance");
@@ -352,6 +361,7 @@ async fn test_confidential_transfer_between_accounts() {
     // Verify recipient can apply pending balance
     let apply_result = apply_pending::apply_pending_balance(
         &env.client,
+        &env.payer,
         &recipient,
         &mint.pubkey(),
     ).await;
