@@ -23,16 +23,16 @@ Token-2022 introduces an **extension system** that allows additional functionali
 │                  TOKEN-2022 EXTENSION SYSTEM                │
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
-│  ┌────────────────────┐      ┌────────────────────┐        │
-│  │   Base Account     │      │  Extension Data    │        │
-│  │   (165 bytes)      │──────│  (Variable size)   │        │
-│  │                    │      │                    │        │
-│  │  • Owner           │      │  Extension 1       │        │
-│  │  • Mint            │      │  Extension 2       │        │
-│  │  • Amount          │      │  Extension 3       │        │
-│  │  • Delegate        │      │  ...               │        │
-│  │  • State           │      │                    │        │
-│  └────────────────────┘      └────────────────────┘        │
+│  ┌────────────────────┐      ┌────────────────────┐         │
+│  │   Base Account     │      │  Extension Data    │         │
+│  │   (165 bytes)      │──────│  (Variable size)   │         │
+│  │                    │      │                    │         │
+│  │  • Owner           │      │  Extension 1       │         │
+│  │  • Mint            │      │  Extension 2       │         │
+│  │  • Amount          │      │  Extension 3       │         │
+│  │  • Delegate        │      │  ...               │         │
+│  │  • State           │      │                    │         │
+│  └────────────────────┘      └────────────────────┘         │
 │                                                             │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -81,41 +81,41 @@ Note: ConfidentialMintBurn disables Deposit/Withdraw operations
 ### Mint Account with ConfidentialTransferMint Extension
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                      MINT ACCOUNT                           │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│  Base Mint Data (82 bytes):                                │
-│  ├─ mint_authority: Option<Pubkey>                         │
-│  ├─ supply: u64                                            │
-│  ├─ decimals: u8                                           │
-│  ├─ is_initialized: bool                                   │
-│  ├─ freeze_authority: Option<Pubkey>                       │
-│  └─ account_type: AccountType                              │
-│                                                             │
-│  Extension Metadata:                                        │
+┌───────────────────────────────────────────────────────────┐
+│                      MINT ACCOUNT                         │
+├───────────────────────────────────────────────────────────┤
+│                                                           │
+│  Base Mint Data (82 bytes):                               │
+│  ├─ mint_authority: Option<Pubkey>                        │
+│  ├─ supply: u64                                           │
+│  ├─ decimals: u8                                          │
+│  ├─ is_initialized: bool                                  │
+│  ├─ freeze_authority: Option<Pubkey>                      │
+│  └─ account_type: AccountType                             │
+│                                                           │
+│  Extension Metadata:                                      │
 │  ├─ extension_type: u16 (ConfidentialTransferMint = 11)   │
-│  └─ length: u16                                            │
-│                                                             │
-│  ConfidentialTransferMint Data (101 bytes):                │
-│  ├─ authority: Option<Pubkey> (33 bytes)                   │
+│  └─ length: u16                                           │
+│                                                           │
+│  ConfidentialTransferMint Data (101 bytes):               │
+│  ├─ authority: Option<Pubkey> (33 bytes)                  │
 │  ├─ auto_approve_new_accounts: bool (1 byte)              │
 │  ├─ auditor_elgamal_pubkey: Option<ElGamalPubkey>         │
 │  │  (33 bytes, for compliance/auditing)                   │
 │  └─ withdraw_withheld_authority_elgamal_pubkey:           │
 │     Option<ElGamalPubkey> (33 bytes, for fee collection)  │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
+│                                                           │
+└───────────────────────────────────────────────────────────┘
 Total Size: 82 + 4 + 101 = 187 bytes (minimum)
 ```
 
 ### Token Account with ConfidentialTransferAccount Extension
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                   TOKEN ACCOUNT                             │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
+┌────────────────────────────────────────────────────────────┐
+│                   TOKEN ACCOUNT                            │
+├────────────────────────────────────────────────────────────┤
+│                                                            │
 │  Base Account Data (165 bytes):                            │
 │  ├─ mint: Pubkey                                           │
 │  ├─ owner: Pubkey                                          │
@@ -126,38 +126,38 @@ Total Size: 82 + 4 + 101 = 187 bytes (minimum)
 │  ├─ delegated_amount: u64                                  │
 │  ├─ close_authority: Option<Pubkey>                        │
 │  └─ account_type: AccountType                              │
-│                                                             │
-│  Extension Metadata:                                        │
-│  ├─ extension_type: u16 (ConfidentialTransferAccount = 12)│
+│                                                            │
+│  Extension Metadata:                                       │
+│  ├─ extension_type: u16 (ConfidentialTransferAccount = 12) │
 │  └─ length: u16                                            │
-│                                                             │
+│                                                            │
 │  ConfidentialTransferAccount Data (286 bytes):             │
 │  ├─ approved: PodBool (1 byte)                             │
 │  │  Whether account is approved for confidential ops       │
-│  ├─ elgamal_pubkey: ElGamalPubkey (32 bytes)              │
+│  ├─ elgamal_pubkey: ElGamalPubkey (32 bytes)               │
 │  │  Public encryption key for this account                 │
-│  ├─ pending_balance_lo: ElGamalCiphertext (64 bytes)      │
+│  ├─ pending_balance_lo: ElGamalCiphertext (64 bytes)       │
 │  │  Encrypted pending balance (lower 64 bits)              │
-│  ├─ pending_balance_hi: ElGamalCiphertext (64 bytes)      │
+│  ├─ pending_balance_hi: ElGamalCiphertext (64 bytes)       │
 │  │  Encrypted pending balance (upper 64 bits)              │
-│  ├─ available_balance: ElGamalCiphertext (64 bytes)       │
+│  ├─ available_balance: ElGamalCiphertext (64 bytes)        │
 │  │  Encrypted available balance (for transfers)            │
 │  ├─ decryptable_available_balance: AeCiphertext            │
 │  │  (36 bytes, AES-encrypted for fast owner decryption)    │
-│  ├─ allow_confidential_credits: PodBool (1 byte)          │
+│  ├─ allow_confidential_credits: PodBool (1 byte)           │
 │  │  Accept incoming confidential transfers                 │
-│  ├─ allow_non_confidential_credits: PodBool (1 byte)      │
+│  ├─ allow_non_confidential_credits: PodBool (1 byte)       │
 │  │  Accept incoming non-confidential transfers             │
-│  ├─ pending_balance_credit_counter: u64 (8 bytes)         │
+│  ├─ pending_balance_credit_counter: u64 (8 bytes)          │
 │  │  Number of unprocessed credits (prevents front-running) │
-│  ├─ maximum_pending_balance_credit_counter: u64 (8 bytes) │
+│  ├─ maximum_pending_balance_credit_counter: u64 (8 bytes)  │
 │  │  Max allowed pending credits before apply required      │
-│  ├─ expected_pending_balance_credit_counter: u64 (8 bytes)│
+│  ├─ expected_pending_balance_credit_counter: u64 (8 bytes) │
 │  │  Expected counter for apply instruction                 │
-│  └─ actual_pending_balance_credit_counter: u64 (8 bytes)  │
-│     Actual counter value                                    │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
+│  └─ actual_pending_balance_credit_counter: u64 (8 bytes)   │
+│     Actual counter value                                   │
+│                                                            │
+└────────────────────────────────────────────────────────────┘
 Total Size: 165 + 4 + 286 = 455 bytes (minimum)
 ```
 

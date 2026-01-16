@@ -43,10 +43,10 @@ Confidentiality is achieved with several encryption techniques:
 ### Cryptographic Primitives
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                  CRYPTOGRAPHIC STACK                        │
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
+┌────────────────────────────────────────────────────────────┐
+│                  CRYPTOGRAPHIC STACK                       │
+├────────────────────────────────────────────────────────────┤
+│                                                            │
 │  ┌─────────────────────┐                                   │
 │  │  Homomorphic        │  Enables arithmetic on            │
 │  │  Encryption         │  encrypted balances               │
@@ -66,8 +66,8 @@ Confidentiality is achieved with several encryption techniques:
 │  │  Proofs             │  revealing amounts                │
 │  │  (Range, Equality)  │                                   │
 │  └─────────────────────┘                                   │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
+│                                                            │
+└────────────────────────────────────────────────────────────┘
 ```
 
 ### Built-in Compliance
@@ -199,7 +199,7 @@ Each confidential token account maintains multiple balance types:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                 TOKEN ACCOUNT STATE                          │
+│                 TOKEN ACCOUNT STATE                         │
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
 │  ┌─────────────────┐                                        │

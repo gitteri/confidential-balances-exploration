@@ -126,11 +126,11 @@ let validity_proof_account = Keypair::new();
 
 ## WASM/JavaScript Issues
 
-### "WASM not initialized"
+### "WASM not initialized" (JavaScript/Browser)
 
-**Cause**: Using crypto functions before `init()`.
+**Cause**: Using crypto functions before `init()` in JavaScript/WASM context.
 
-**Solution**:
+**Solution** (for JavaScript users):
 ```typescript
 import init from '@solana/zk-sdk/web';
 
@@ -141,11 +141,13 @@ await init();
 const keypair = new ElGamalKeypair();
 ```
 
-### "BigInt not supported"
+**Rust users**: No initialization needed - just use the crates directly.
 
-**Cause**: Using number literals instead of BigInt.
+### "BigInt not supported" (JavaScript)
 
-**Solution**:
+**Cause**: Using number literals instead of BigInt in JavaScript.
+
+**Solution** (for JavaScript users):
 ```typescript
 // Wrong
 const amount = 1000;
@@ -156,11 +158,13 @@ const amount = 1000n;
 const amount = BigInt(1000);
 ```
 
-### Bundle size too large
+**Rust users**: Use native `u64` type - no BigInt needed.
 
-**Cause**: `@solana/zk-sdk` is ~8MB due to WASM.
+### Bundle size too large (JavaScript/Web)
 
-**Solutions**:
+**Cause**: `@solana/zk-sdk` is ~8MB due to WASM - affects web applications.
+
+**Solutions** (for JavaScript users):
 1. Lazy load the crypto module
 2. Use code splitting
 3. Load WASM from CDN
@@ -170,6 +174,8 @@ const amount = BigInt(1000);
 const zkSdk = await import('@solana/zk-sdk/web');
 await zkSdk.default(); // init
 ```
+
+**Rust users**: Compile natively - no bundle size concerns.
 
 ## Transaction Failures
 
@@ -269,15 +275,15 @@ submit_transactions(transactions)?;
 
 ### Enable verbose logging
 
+**Rust**:
 ```rust
-// Rust
 env_logger::Builder::from_env(
     env_logger::Env::default().default_filter_or("debug")
 ).init();
 ```
 
+**JavaScript** (browser):
 ```typescript
-// JavaScript
 localStorage.setItem('debug', 'solana:*');
 ```
 
@@ -292,11 +298,13 @@ spl-token display <TOKEN_ACCOUNT>
 
 ### Verify proof locally before submitting
 
+**Rust**:
 ```rust
-// Rust
 proof_data.verify()?; // Throws if invalid
+```
 
-// TypeScript
+**JavaScript**:
+```typescript
 proof.verify(); // Throws if invalid
 ```
 

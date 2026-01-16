@@ -47,10 +47,21 @@ Confidential transfers require zero-knowledge proofs verified by a dedicated Sol
 - **Purpose**: Verifies equality, range, and validity proofs on-chain
 - **Integration**: Token-2022 instructions reference proof context accounts
 
-## Workshop Structure
+## Repository Structure
 
 ```
 .
+├── src/                            # Core implementation
+│   ├── configure.rs                # Configure accounts for confidential transfers
+│   ├── deposit.rs                  # Deposit from public to confidential
+│   ├── apply_pending.rs            # Apply pending to available balance
+│   ├── withdraw.rs                 # Withdraw from confidential to public
+│   └── transfer.rs                 # Confidential transfer between accounts
+├── examples/
+│   └── run_transfer.rs             # End-to-end transfer example
+├── tests/
+│   ├── integration_test.rs         # Integration tests for all operations
+│   └── common/                     # Test utilities
 ├── docs/
 │   ├── guides/
 │   │   ├── product-guide.md        # High-level product overview
@@ -58,12 +69,8 @@ Confidential transfers require zero-knowledge proofs verified by a dedicated Sol
 │   ├── reference/
 │   │   ├── token-extensions.md     # Token-2022 program architecture
 │   │   ├── cryptography.md         # Encryption & proof details
-│   │   ├── rust-deps.md            # Rust crate reference
-│   │   └── js-clients.md           # JavaScript/WASM client guide
+│   │   └── rust-deps.md            # Rust crate reference
 │   └── FAQ.md                      # Troubleshooting & common issues
-├── examples/
-│   ├── rust/                       # Rust code examples
-│   └── js/                         # JavaScript examples
 └── README.md                       # This file
 ```
 
@@ -87,24 +94,37 @@ spl-token-confidential-transfer-proof-generation = "0.5.1"
 spl-token-confidential-transfer-proof-extraction = "0.5.1"
 ```
 
-### JavaScript/TypeScript
-
-```json
-{
-  "@solana-program/zk-elgamal-proof": "0.1.0",
-  "@solana/zk-sdk": "0.3.0",
-  "@solana/kit": "^5.0"
-}
-```
-
 ## Quick Start
 
 ### Prerequisites
 
 - Solana CLI 2.1.13+ (`solana --version`)
 - SPL Token CLI 5.1.0+ (`spl-token --version`)
-- Rust 1.70+ (for Rust examples)
-- Node.js 18+ (for JS examples)
+- Rust 1.70+
+
+### Running the Example Implementation
+
+This repository includes a complete Rust implementation of all confidential transfer operations:
+
+```bash
+# Start local test validator
+solana-test-validator --quiet --reset &
+
+# Run all integration tests
+cargo test --test integration_test
+
+# Run a specific test
+cargo test test_confidential_transfer_between_accounts -- --nocapture
+```
+
+**Available Operations:**
+- `src/configure.rs` - Configure token accounts for confidential transfers
+- `src/deposit.rs` - Deposit from public to confidential balance
+- `src/apply_pending.rs` - Apply pending balance to available balance
+- `src/withdraw.rs` - Withdraw from confidential to public balance
+- `src/transfer.rs` - Transfer confidentially between accounts (with proof context state accounts)
+
+All operations are tested in `tests/integration_test.rs` with complete end-to-end flows.
 
 ### Try it with CLI
 
@@ -117,7 +137,7 @@ curl -sSf https://raw.githubusercontent.com/solana-program/token-2022/main/clien
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    CONFIDENTIAL TRANSFER FLOW                │
+│                    CONFIDENTIAL TRANSFER FLOW               │
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
 │  Sender                                     Recipient       │
@@ -167,6 +187,13 @@ Each confidential token account has two encryption keys derived from the owner's
 | **Ciphertext Validity** | Proves ciphertexts are properly generated | Small |
 | **Range Proof** | Proves value is in range [0, u64::MAX] | Large |
 
+**Proof Context State Accounts**: To avoid transaction size limitations, proofs can be stored in temporary on-chain accounts and referenced by the transfer instruction. The implementation in `src/transfer.rs` automatically:
+1. Creates proof context state accounts for all three proof types
+2. Executes the transfer referencing those accounts
+3. Closes the proof accounts to reclaim rent
+
+This approach allows transfers of any amount without hitting Solana's transaction size limit.
+
 ## Resources
 
 ### Official Documentation
@@ -196,17 +223,17 @@ Each confidential token account has two encryption keys derived from the owner's
 - [Deposit Transaction](https://explorer.solana.com/tx/wJw7HhX1p737XNvVwJLEwE7oCDuSxyJYZPD7xJqLWL4ao3osJ7bdmUoy8R5pTtfL2EqPysr8v2wgJRNTMM9VHsM?cluster=devnet)
 - [Apply Pending Balance](https://explorer.solana.com/tx/6y1aNHz7NzVzbEXxf4Rw5xV1EZ8CWFx1zamL9N49YkdJ3JKRpMSLVqdSGfBobSbiAj5zuxfyibwTC1NXgKdjWco?cluster=devnet)
 
-## Workshop Sections
+## Documentation
 
 ### Guides
 1. **[Product Guide](docs/guides/product-guide.md)** - Understanding the product from a high level
-2. **[Wallet Integration](docs/guides/wallet-integration.md)** - How to integrate into wallets
+2. **[Wallet Integration](docs/guides/wallet-integration.md)** - Integration patterns for wallet developers
 
 ### Technical Reference
 3. **[Token Extensions Architecture](docs/reference/token-extensions.md)** - Token-2022 program-level details
 4. **[Cryptography Reference](docs/reference/cryptography.md)** - Deep dive into the crypto primitives
 5. **[Rust Dependencies](docs/reference/rust-deps.md)** - Using the Rust crates
-6. **[JS/WASM Clients](docs/reference/js-clients.md)** - Building browser/JS clients
+6. **[JS/WASM Clients](docs/reference/js-clients.md)** - JavaScript and WASM SDK reference
 
 ### Troubleshooting
 7. **[FAQ & Troubleshooting](docs/FAQ.md)** - Common issues and solutions
