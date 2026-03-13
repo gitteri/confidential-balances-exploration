@@ -17,6 +17,8 @@ use spl_token_2022::{
             account_info::TransferAccountInfo,
             ConfidentialTransferAccount,
         },
+        confidential_transfer_fee::ConfidentialTransferFeeConfig,
+        transfer_fee::TransferFeeConfig,
         BaseStateWithExtensions, StateWithExtensions,
     },
     solana_zk_sdk::encryption::{
@@ -27,9 +29,13 @@ use spl_token_2022::{
 };
 use spl_token_client::{
     client::{ProgramRpcClient, ProgramRpcClientSendTransaction, RpcClientResponse},
-    token::{ProofAccountWithCiphertext, Token},
+    token::{ComputeUnitLimit, ProofAccountWithCiphertext, Token},
 };
-use spl_token_confidential_transfer_proof_generation::transfer::TransferProofData;
+use spl_token_2022::solana_zk_sdk::zk_elgamal_proof_program::proof_data::batched_range_proof::{
+    batched_range_proof_u256::BatchedRangeProofU256Data,
+    BatchedRangeProofContext,
+};
+use spl_token_confidential_transfer_proof_generation::transfer_with_fee::TransferWithFeeProofData;
 use std::sync::Arc;
 
 /// Helper to extract signature from RpcClientResponse
@@ -42,14 +48,16 @@ fn extract_signature(response: RpcClientResponse) -> Result<solana_sdk::signatur
 
 /// Transfer tokens confidentially from sender to recipient using proof context state accounts
 ///
-/// This implementation:
-/// 1. Fetches recipient's and auditor's ElGamal public keys from their accounts
-/// 2. Generates ZK proofs for the transfer
-/// 3. Creates temporary on-chain accounts to store the proofs
-/// 4. Executes the transfer referencing those proof accounts
-/// 5. Closes the proof accounts to reclaim rent
+/// This implementation uses the fee-aware transfer variant since the mint has
+/// TransferFeeConfig + ConfidentialTransferFeeConfig extensions.
 ///
-/// This approach avoids transaction size limitations by not including proofs inline.
+/// Steps:
+/// 1. Fetches recipient's and auditor's ElGamal public keys from their accounts
+/// 2. Fetches fee parameters from the mint's TransferFeeConfig and ConfidentialTransferFeeConfig
+/// 3. Generates ZK proofs for the transfer with fee (5 proofs total)
+/// 4. Creates temporary on-chain accounts to store the proofs
+/// 5. Executes the transfer referencing those proof accounts
+/// 6. Closes the proof accounts to reclaim rent
 ///
 /// Note: sender must be a Keypair (not just a Signer) because the Token client requires
 /// cloning the keypair for fee payment.
@@ -83,19 +91,34 @@ pub async fn transfer_confidential(
         recipient_ct_extension.elgamal_pubkey.try_into()
             .map_err(|_| "Failed to convert recipient ElGamal pubkey")?;
 
-    // Fetch auditor's ElGamal public key from the mint account
+    // Fetch mint account data (used for auditor key, fee config, and confidential fee config)
     use spl_token_2022::extension::confidential_transfer::ConfidentialTransferMint;
     use spl_token_2022::state::Mint;
     use spl_token_2022::solana_zk_sdk::encryption::pod::elgamal::PodElGamalPubkey;
 
     let mint_account_data = client.get_account(mint)?;
     let mint_account = StateWithExtensions::<Mint>::unpack(&mint_account_data.data)?;
+
+    // Get auditor ElGamal pubkey from ConfidentialTransferMint
     let mint_ct_extension = mint_account.get_extension::<ConfidentialTransferMint>()?;
     let auditor_elgamal_pubkey: Option<spl_token_2022::solana_zk_sdk::encryption::elgamal::ElGamalPubkey> =
         Option::<PodElGamalPubkey>::from(mint_ct_extension.auditor_elgamal_pubkey)
             .map(|pk| pk.try_into())
             .transpose()
             .map_err(|_| "Failed to convert auditor ElGamal pubkey")?;
+
+    // Get fee parameters from TransferFeeConfig
+    let transfer_fee_config = mint_account.get_extension::<TransferFeeConfig>()?;
+    let epoch_info = client.get_epoch_info()?;
+    let epoch_fee = transfer_fee_config.get_epoch_fee(epoch_info.epoch);
+    let fee_rate_basis_points: u16 = epoch_fee.transfer_fee_basis_points.into();
+    let maximum_fee: u64 = epoch_fee.maximum_fee.into();
+
+    // Get withdraw withheld authority ElGamal pubkey from ConfidentialTransferFeeConfig
+    let ct_fee_config = mint_account.get_extension::<ConfidentialTransferFeeConfig>()?;
+    let withdraw_withheld_authority_elgamal_pubkey: spl_token_2022::solana_zk_sdk::encryption::elgamal::ElGamalPubkey =
+        ct_fee_config.withdraw_withheld_authority_elgamal_pubkey.try_into()
+            .map_err(|_| "Failed to convert withdraw withheld authority ElGamal pubkey")?;
 
     // Derive sender's encryption keys
     let sender_elgamal = ElGamalKeypair::new_from_signer(
@@ -131,19 +154,25 @@ pub async fn transfer_confidential(
         ).into());
     }
 
-    println!("🔐 Generating transfer proofs for {} tokens...", amount);
+    println!("🔐 Generating transfer with fee proofs for {} tokens (fee: {} bps, max: {})...",
+        amount, fee_rate_basis_points, maximum_fee);
 
-    // Generate transfer proofs
-    let TransferProofData {
+    // Generate transfer with fee proofs (5 proofs instead of 3)
+    let TransferWithFeeProofData {
         equality_proof_data,
-        ciphertext_validity_proof_data_with_ciphertext,
+        transfer_amount_ciphertext_validity_proof_data_with_ciphertext,
+        percentage_with_cap_proof_data,
+        fee_ciphertext_validity_proof_data,
         range_proof_data,
-    } = transfer_info.generate_split_transfer_proof_data(
+    } = transfer_info.generate_split_transfer_with_fee_proof_data(
         amount,
         &sender_elgamal,
         &sender_aes,
         &recipient_elgamal_pubkey,
         auditor_elgamal_pubkey.as_ref(),
+        &withdraw_withheld_authority_elgamal_pubkey,
+        fee_rate_basis_points,
+        maximum_fee,
     )?;
 
     println!("📦 Creating proof context state accounts...");
@@ -156,8 +185,6 @@ pub async fn transfer_confidential(
     ));
 
     // Create Token client wrapper
-    // Note: We use sender as the fee payer for Token operations since they must
-    // have SOL anyway to pay for the proof account rent
     let program_client = Arc::new(ProgramRpcClient::new(
         async_client,
         ProgramRpcClientSendTransaction,
@@ -173,60 +200,113 @@ pub async fn transfer_confidential(
         mint,
         None, // decimals - not needed for this operation
         sender_arc,
-    );
+    )
+    .with_compute_unit_limit(ComputeUnitLimit::Static(1_400_000));
 
-    // Create proof context state accounts
+    // Create proof context state accounts (5 for transfer with fee)
+    // All proofs use split=true (separate create + verify txs) because the
+    // combined create+verify transactions exceed the 1232-byte tx size limit.
+    // The range proof (U256) is too large even for split, so it uses the
+    // record account approach (chunked writes + verify from record).
     let equality_proof_account = Keypair::new();
     let ciphertext_validity_proof_account = Keypair::new();
+    let percentage_with_cap_proof_account = Keypair::new();
+    let fee_ciphertext_validity_proof_account = Keypair::new();
     let range_proof_account = Keypair::new();
 
     let mut signatures = Vec::new();
 
-    // Create equality proof account
+    // Create equality proof account (split: create account, then verify proof)
     let response = token.confidential_transfer_create_context_state_account(
         &equality_proof_account.pubkey(),
         &sender.pubkey(),
         &equality_proof_data,
-        false,
+        true,
         &[&equality_proof_account],
     ).await?;
     signatures.push(extract_signature(response)?);
 
-    // Create ciphertext validity proof account
+    // Create ciphertext validity proof account (split)
     let response = token.confidential_transfer_create_context_state_account(
         &ciphertext_validity_proof_account.pubkey(),
         &sender.pubkey(),
-        &ciphertext_validity_proof_data_with_ciphertext.proof_data,
-        false,
+        &transfer_amount_ciphertext_validity_proof_data_with_ciphertext.proof_data,
+        true,
         &[&ciphertext_validity_proof_account],
     ).await?;
     signatures.push(extract_signature(response)?);
 
-    // Create range proof account
+    // Create percentage with cap proof account (split)
     let response = token.confidential_transfer_create_context_state_account(
-        &range_proof_account.pubkey(),
+        &percentage_with_cap_proof_account.pubkey(),
+        &sender.pubkey(),
+        &percentage_with_cap_proof_data,
+        true,
+        &[&percentage_with_cap_proof_account],
+    ).await?;
+    signatures.push(extract_signature(response)?);
+
+    // Create fee ciphertext validity proof account (split)
+    let response = token.confidential_transfer_create_context_state_account(
+        &fee_ciphertext_validity_proof_account.pubkey(),
+        &sender.pubkey(),
+        &fee_ciphertext_validity_proof_data,
+        true,
+        &[&fee_ciphertext_validity_proof_account],
+    ).await?;
+    signatures.push(extract_signature(response)?);
+
+    // Range proof (U256) is too large even for split — use record account approach:
+    // 1. Write proof data to a record account (chunked across multiple txs)
+    // 2. Verify proof from the record account into a context state account
+    // 3. Close the record account
+    let range_proof_record_account = Keypair::new();
+
+    let record_responses = token.confidential_transfer_create_record_account(
+        &range_proof_record_account.pubkey(),
         &sender.pubkey(),
         &range_proof_data,
-        true, // range proofs require split proof
+        &range_proof_record_account,
+        sender,
+    ).await?;
+    for response in record_responses {
+        signatures.push(extract_signature(response)?);
+    }
+
+    // Create context state account from the record account
+    let response = token.confidential_transfer_create_context_state_account_from_record::<_, BatchedRangeProofU256Data, BatchedRangeProofContext>(
+        &range_proof_account.pubkey(),
+        &sender.pubkey(),
+        &range_proof_record_account.pubkey(),
         &[&range_proof_account],
     ).await?;
     signatures.push(extract_signature(response)?);
 
-    println!("🔄 Executing confidential transfer...");
+    // Close the record account to reclaim rent
+    token.confidential_transfer_close_record_account(
+        &range_proof_record_account.pubkey(),
+        &sender_token_account,
+        &sender.pubkey(),
+        &[sender],
+    ).await?;
+
+    println!("🔄 Executing confidential transfer with fee...");
 
     // Execute transfer using proof context accounts
     let ciphertext_validity_proof = ProofAccountWithCiphertext {
         context_state_account: ciphertext_validity_proof_account.pubkey(),
-        ciphertext_lo: ciphertext_validity_proof_data_with_ciphertext.ciphertext_lo,
-        ciphertext_hi: ciphertext_validity_proof_data_with_ciphertext.ciphertext_hi,
+        ciphertext_lo: transfer_amount_ciphertext_validity_proof_data_with_ciphertext.ciphertext_lo,
+        ciphertext_hi: transfer_amount_ciphertext_validity_proof_data_with_ciphertext.ciphertext_hi,
     };
 
-    let response = token.confidential_transfer_transfer(
+    let response = token.confidential_transfer_transfer_with_fee(
         &sender_token_account,
         &recipient_token_account,
         &sender.pubkey(),
         Some(&equality_proof_account.pubkey()),
         Some(&ciphertext_validity_proof),
+        Some(&percentage_with_cap_proof_account.pubkey()),
+        Some(&fee_ciphertext_validity_proof_account.pubkey()),
         Some(&range_proof_account.pubkey()),
         amount,
         None, // Let Token client fetch account info internally
@@ -234,13 +314,16 @@ pub async fn transfer_confidential(
         &sender_aes,
         &recipient_elgamal_pubkey,
         auditor_elgamal_pubkey.as_ref(),
+        &withdraw_withheld_authority_elgamal_pubkey,
+        fee_rate_basis_points,
+        maximum_fee,
         &[sender],
     ).await?;
     signatures.push(extract_signature(response)?);
 
     println!("🧹 Closing proof context accounts...");
 
-    // Close proof accounts to reclaim rent
+    // Close proof accounts to reclaim rent (5 accounts)
     let response = token.confidential_transfer_close_context_state_account(
         &equality_proof_account.pubkey(),
         &sender_token_account,
@@ -251,6 +334,22 @@ pub async fn transfer_confidential(
 
     let response = token.confidential_transfer_close_context_state_account(
         &ciphertext_validity_proof_account.pubkey(),
+        &sender_token_account,
+        &sender.pubkey(),
+        &[sender],
+    ).await?;
+    signatures.push(extract_signature(response)?);
+
+    let response = token.confidential_transfer_close_context_state_account(
+        &percentage_with_cap_proof_account.pubkey(),
+        &sender_token_account,
+        &sender.pubkey(),
+        &[sender],
+    ).await?;
+    signatures.push(extract_signature(response)?);
+
+    let response = token.confidential_transfer_close_context_state_account(
+        &fee_ciphertext_validity_proof_account.pubkey(),
         &sender_token_account,
         &sender.pubkey(),
         &[sender],
