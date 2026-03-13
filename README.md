@@ -10,14 +10,15 @@ Confidential Balances is a set of Token-2022 extensions that enable **privacy on
 
 Confidential Balances uses the **Token-2022 (Token Extensions) program**, which allows modular features to be added to tokens.
 
-| Extension | Extension Type | Applied To | Required | Purpose |
-|-----------|----------------|------------|----------|---------|
-| **ConfidentialTransferMint** | `ExtensionType(11)` | Mint | Yes | Configures mint-level settings (auditor, authority, auto-approval) |
-| **ConfidentialTransferAccount** | `ExtensionType(12)` | Token Account | Yes | Stores encrypted balances and encryption keys |
-| **ConfidentialTransferFeeConfig** | `ExtensionType(13)` | Mint | Optional | Enables confidential transfer fee calculation |
-| **ConfidentialMintBurn** | `ExtensionType(33)` | Mint | Optional | Allows private token issuance (disables deposit/withdraw) |
+| Extension                         | Extension Type      | Applied To    | Required | Purpose                                                            |
+| --------------------------------- | ------------------- | ------------- | -------- | ------------------------------------------------------------------ |
+| **ConfidentialTransferMint**      | `ExtensionType(11)` | Mint          | Yes      | Configures mint-level settings (auditor, authority, auto-approval) |
+| **ConfidentialTransferAccount**   | `ExtensionType(12)` | Token Account | Yes      | Stores encrypted balances and encryption keys                      |
+| **ConfidentialTransferFeeConfig** | `ExtensionType(13)` | Mint          | Optional | Enables confidential transfer fee calculation                      |
+| **ConfidentialMintBurn**          | `ExtensionType(33)` | Mint          | Optional | Allows private token issuance (disables deposit/withdraw)          |
 
 **Key Points:**
+
 - Extensions must be initialized **at creation time** (cannot be added later)
 - Account space must be allocated to fit extension data
 - Token-2022 Program ID: `TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb`
@@ -29,7 +30,7 @@ Confidential Balances support varying degrees of configurable privacy:
 1. **Disabled** - No confidentiality (standard SPL tokens)
 2. **Whitelisted** - Only approved accounts can use confidential transfers
 3. **Opt-in** - Users choose to enable confidentiality
-5. **Required** - All transfers must be confidential
+4. **Required** - All transfers must be confidential
 
 ## Cryptographic Foundations
 
@@ -43,6 +44,7 @@ The privacy is achieved through:
 ### ZK ElGamal Proof Program
 
 Confidential transfers require zero-knowledge proofs verified by a dedicated Solana program:
+
 - **Program ID**: `ZkE1Gama1Proof11111111111111111111111111111`
 - **Purpose**: Verifies equality, range, and validity proofs on-chain
 - **Integration**: Token-2022 instructions reference proof context accounts
@@ -103,6 +105,47 @@ spl-token-confidential-transfer-proof-extraction = "0.5.1"
 - SPL Token CLI 5.1.0+ (`spl-token --version`)
 - Rust 1.70+
 
+### Running the Example with Confidential Transfers, Transfer Fees, and Permanent Delegates
+
+First, create a temporary payer keypair:
+
+```sh
+solana-keygen grind --starts-with Pay:1
+```
+
+A new JSON file `Pay....json` should now exist at the root of the project.
+
+By default, running the example will target a local Solana network. To set up a local simulation network that has Confidential Transfers enabled, install [Surfpool](https://surfpool.run) at the `zk-edge` branch. To do this, in another terminal run:
+
+```sh
+git clone git@github.com:solana-foundation/surfpool.git
+cd surfpool
+git checkout zk-edge
+cargo surfpool-install
+```
+
+Once you've installed surfpool, start a local network with:
+
+```sh
+surfpool start
+```
+
+To execute the example, run:
+
+```sh
+PAYER_KEYPAIR=$(cat Pay....json) cargo run --package conf-balances-examples --example run_transfer
+```
+
+Be sure to point the `Pay....json` to your actual file.
+
+You should see transactions executed on your local surfnet TUI, and the logs from executing the script should display transaction signatures and balances.
+
+To target the [public zk-edge network](https://zk-edge.surfnet.dev) for the test instead of your local surfnet, run
+
+```sh
+SOLANA_RPC_URL="https://zk-edge.surfnet.dev:8899" PAYER_KEYPAIR=$(cat Pay....json) cargo run --package conf-balances-examples --example run_transfer
+```
+
 ### Running the Example Implementation
 
 This repository includes a complete Rust implementation of all confidential transfer operations:
@@ -130,6 +173,7 @@ cargo run --example get_balances
 ```
 
 **Available Operations:**
+
 - `src/configure.rs` - Configure token accounts for confidential transfers
 - `src/deposit.rs` - Deposit from public to confidential balance
 - `src/apply_pending.rs` - Apply pending balance to available balance
@@ -137,6 +181,7 @@ cargo run --example get_balances
 - `src/transfer.rs` - Transfer confidentially between accounts (with proof context state accounts)
 
 **Examples:**
+
 - `examples/run_transfer.rs` - Complete end-to-end transfer with balance display at each step
 - `examples/get_balances.rs` - Query and decrypt all balance types (public, pending, available)
 
@@ -182,11 +227,11 @@ curl -sSf https://raw.githubusercontent.com/solana-program/token-2022/main/clien
 
 ### Balance Types
 
-| Balance Type | Visibility | Purpose |
-|--------------|------------|---------|
-| **Public** | Visible on-chain | Standard SPL token balance |
-| **Pending** | Encrypted | Incoming transfers waiting to be applied |
-| **Available** | Encrypted | Usable confidential balance for transfers |
+| Balance Type  | Visibility       | Purpose                                   |
+| ------------- | ---------------- | ----------------------------------------- |
+| **Public**    | Visible on-chain | Standard SPL token balance                |
+| **Pending**   | Encrypted        | Incoming transfers waiting to be applied  |
+| **Available** | Encrypted        | Usable confidential balance for transfers |
 
 ### Encryption Keys
 
@@ -197,13 +242,14 @@ Each confidential token account has two encryption keys derived from the owner's
 
 ### ZK Proofs Required for Transfers
 
-| Proof Type | Purpose | Size |
-|------------|---------|------|
-| **Equality Proof** | Proves two ciphertexts encrypt the same value | Small |
-| **Ciphertext Validity** | Proves ciphertexts are properly generated | Small |
-| **Range Proof** | Proves value is in range [0, u64::MAX] | Large |
+| Proof Type              | Purpose                                       | Size  |
+| ----------------------- | --------------------------------------------- | ----- |
+| **Equality Proof**      | Proves two ciphertexts encrypt the same value | Small |
+| **Ciphertext Validity** | Proves ciphertexts are properly generated     | Small |
+| **Range Proof**         | Proves value is in range [0, u64::MAX]        | Large |
 
 **Proof Context State Accounts**: To avoid transaction size limitations, proofs can be stored in temporary on-chain accounts and referenced by the transfer instruction. The implementation in `src/transfer.rs` automatically:
+
 1. Creates proof context state accounts for all three proof types
 2. Executes the transfer referencing those accounts
 3. Closes the proof accounts to reclaim rent
@@ -242,16 +288,19 @@ This approach allows transfers of any amount without hitting Solana's transactio
 ## Documentation
 
 ### Guides
+
 1. **[Product Guide](docs/guides/product-guide.md)** - Understanding the product from a high level
 2. **[Wallet Integration](docs/guides/wallet-integration.md)** - Integration patterns for wallet developers
 
 ### Technical Reference
+
 3. **[Token Extensions Architecture](docs/reference/token-extensions.md)** - Token-2022 program-level details
 4. **[Cryptography Reference](docs/reference/cryptography.md)** - Deep dive into the crypto primitives
 5. **[Rust Dependencies](docs/reference/rust-deps.md)** - Using the Rust crates
 6. **[JS/WASM Clients](docs/reference/js-clients.md)** - JavaScript and WASM SDK reference
 
 ### Troubleshooting
+
 7. **[FAQ & Troubleshooting](docs/FAQ.md)** - Common issues and solutions
 
 ## License

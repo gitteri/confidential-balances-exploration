@@ -75,7 +75,10 @@ pub async fn configure_account_for_confidential_transfers(
         &payer.pubkey(),
         &authority.pubkey(),
         &[&authority.pubkey()],
-        &[ExtensionType::ConfidentialTransferAccount],
+        &[
+            ExtensionType::ConfidentialTransferAccount,
+            ExtensionType::ConfidentialTransferFeeAmount,
+        ],
     )?);
 
     // 2. Configure account (includes proof instruction)
