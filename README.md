@@ -149,6 +149,43 @@ All operations are tested in `tests/integration_test.rs` with complete end-to-en
 curl -sSf https://raw.githubusercontent.com/solana-program/token-2022/main/clients/cli/examples/confidential-transfer.sh | bash
 ```
 
+### Demo server (for the zkproof8 slide deck)
+
+The `demo-server` binary wraps the modules above in a small HTTP API so a webapp
+deck can drive a live confidential transfer on stage. Single-tenant, in-memory,
+all keypairs in `.env`.
+
+**One-time setup:**
+
+```bash
+# Generate a fresh .env with five keypairs (PAYER / MINT / SENDER / RECEIVER / AUDITOR)
+cargo run --bin demo-server -- generate-env > .env
+
+# The output prints PAYER pubkey to stderr — fund it.
+solana airdrop 5 <PAYER_PUBKEY> --url https://api.devnet.solana.com
+```
+
+**Run the server:**
+
+```bash
+cargo run --bin demo-server
+# listens on http://localhost:8088
+```
+
+**Endpoints:**
+
+| Method | Path                  | Body                              | Notes                                                        |
+| ------ | --------------------- | --------------------------------- | ------------------------------------------------------------ |
+| GET    | `/demo/health`        |                                   | `{ ok, validator_reachable, mint, port, rpc_url }`           |
+| GET    | `/demo/state`         |                                   | full ledger snapshot for the four-column slide               |
+| POST   | `/demo/init`          |                                   | idempotent: mint if missing, configure ATAs, top up sender   |
+| POST   | `/demo/transfer`      | `{ "amount_ui": 250000 }` opt.    | runs the full confidential transfer flow                     |
+| POST   | `/demo/apply-pending` | `{ "account": "sender"\|"receiver" }` | moves pending balance to available                       |
+
+`SOLANA_RPC_URL` selects devnet or local (`surfpool`, etc). All demo state
+resets when keypairs in `.env` are rotated; soft reset on devnet just re-runs
+`/demo/init`.
+
 ## Core Operations Flow
 
 ```

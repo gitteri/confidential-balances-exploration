@@ -57,12 +57,47 @@ fn extract_signature(response: RpcClientResponse) -> Result<solana_sdk::signatur
 /// Returns signatures for all transactions (proof creation + transfer + cleanup)
 pub async fn transfer_confidential(
     client: &RpcClient,
-    _payer: &dyn Signer,
+    payer: &dyn Signer,
     sender: &Keypair,
     mint: &solana_sdk::pubkey::Pubkey,
     recipient: &solana_sdk::pubkey::Pubkey,
     amount: u64,
 ) -> MultiSigResult {
+    transfer_confidential_with_progress(client, payer, sender, mint, recipient, amount, None).await
+}
+
+/// Same as `transfer_confidential` but emits a progress event at every stage
+/// for the demo UI to render live.
+#[allow(clippy::too_many_arguments)]
+pub async fn transfer_confidential_with_progress(
+    client: &RpcClient,
+    _payer: &dyn Signer,
+    sender: &Keypair,
+    mint: &solana_sdk::pubkey::Pubkey,
+    recipient: &solana_sdk::pubkey::Pubkey,
+    amount: u64,
+    progress: ProgressSink<'_>,
+) -> MultiSigResult {
+    let phase = |name: &str, detail: &str| {
+        emit(
+            progress,
+            TransferProgress::Phase {
+                name: name.to_string(),
+                detail: detail.to_string(),
+            },
+        );
+    };
+    let sig_event = |label: &str, sig: &solana_sdk::signature::Signature| {
+        emit(
+            progress,
+            TransferProgress::Signature {
+                label: label.to_string(),
+                sig: sig.to_string(),
+            },
+        );
+    };
+
+    phase("fetch-state", "Reading recipient and auditor pubkeys from chain");
     let sender_token_account = get_associated_token_address_with_program_id(
         &sender.pubkey(),
         mint,
@@ -96,6 +131,11 @@ pub async fn transfer_confidential(
             .map(|pk| pk.try_into())
             .transpose()
             .map_err(|_| "Failed to convert auditor ElGamal pubkey")?;
+
+    phase(
+        "derive-keys",
+        "Deriving sender's ElGamal and AES keys from authority signature",
+    );
 
     // Derive sender's encryption keys
     let sender_elgamal = ElGamalKeypair::new_from_signer(
@@ -131,6 +171,10 @@ pub async fn transfer_confidential(
         ).into());
     }
 
+    phase(
+        "generate-proofs",
+        "Generating equality, ciphertext-validity, and range proofs",
+    );
     println!("🔐 Generating transfer proofs for {} tokens...", amount);
 
     // Generate transfer proofs
@@ -146,6 +190,10 @@ pub async fn transfer_confidential(
         auditor_elgamal_pubkey.as_ref(),
     )?;
 
+    phase(
+        "create-proof-accounts",
+        "Allocating proof context state accounts on-chain (3 transactions)",
+    );
     println!("📦 Creating proof context state accounts...");
 
     // Create async RpcClient for spl-token-client
@@ -190,7 +238,9 @@ pub async fn transfer_confidential(
         false,
         &[&equality_proof_account],
     ).await?;
-    signatures.push(extract_signature(response)?);
+    let sig = extract_signature(response)?;
+    sig_event("equality-proof", &sig);
+    signatures.push(sig);
 
     // Create ciphertext validity proof account
     let response = token.confidential_transfer_create_context_state_account(
@@ -200,7 +250,9 @@ pub async fn transfer_confidential(
         false,
         &[&ciphertext_validity_proof_account],
     ).await?;
-    signatures.push(extract_signature(response)?);
+    let sig = extract_signature(response)?;
+    sig_event("ciphertext-validity-proof", &sig);
+    signatures.push(sig);
 
     // Create range proof account
     let response = token.confidential_transfer_create_context_state_account(
@@ -210,8 +262,14 @@ pub async fn transfer_confidential(
         true, // range proofs require split proof
         &[&range_proof_account],
     ).await?;
-    signatures.push(extract_signature(response)?);
+    let sig = extract_signature(response)?;
+    sig_event("range-proof", &sig);
+    signatures.push(sig);
 
+    phase(
+        "submit-transfer",
+        "Submitting confidential transfer instruction",
+    );
     println!("🔄 Executing confidential transfer...");
 
     // Execute transfer using proof context accounts
@@ -236,8 +294,14 @@ pub async fn transfer_confidential(
         auditor_elgamal_pubkey.as_ref(),
         &[sender],
     ).await?;
-    signatures.push(extract_signature(response)?);
+    let sig = extract_signature(response)?;
+    sig_event("transfer", &sig);
+    signatures.push(sig);
 
+    phase(
+        "close-proof-accounts",
+        "Closing proof context state accounts and reclaiming rent",
+    );
     println!("🧹 Closing proof context accounts...");
 
     // Close proof accounts to reclaim rent
@@ -247,7 +311,9 @@ pub async fn transfer_confidential(
         &sender.pubkey(),
         &[sender],
     ).await?;
-    signatures.push(extract_signature(response)?);
+    let sig = extract_signature(response)?;
+    sig_event("close-equality-proof", &sig);
+    signatures.push(sig);
 
     let response = token.confidential_transfer_close_context_state_account(
         &ciphertext_validity_proof_account.pubkey(),
@@ -255,7 +321,9 @@ pub async fn transfer_confidential(
         &sender.pubkey(),
         &[sender],
     ).await?;
-    signatures.push(extract_signature(response)?);
+    let sig = extract_signature(response)?;
+    sig_event("close-ciphertext-validity-proof", &sig);
+    signatures.push(sig);
 
     let response = token.confidential_transfer_close_context_state_account(
         &range_proof_account.pubkey(),
@@ -263,8 +331,16 @@ pub async fn transfer_confidential(
         &sender.pubkey(),
         &[sender],
     ).await?;
-    signatures.push(extract_signature(response)?);
+    let sig = extract_signature(response)?;
+    sig_event("close-range-proof", &sig);
+    signatures.push(sig);
 
+    emit(
+        progress,
+        TransferProgress::Done {
+            sigs: signatures.iter().map(|s| s.to_string()).collect(),
+        },
+    );
     println!("✅ Transfer complete with {} transactions", signatures.len());
 
     Ok(signatures)
