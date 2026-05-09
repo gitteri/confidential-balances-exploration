@@ -33,6 +33,7 @@ use spl_token_2022::{
         ExtensionType,
     },
     instruction::reallocate,
+    solana_zk_sdk::encryption::pod::auth_encryption::PodAeCiphertext as PodAeCiphertextLegacy,
 };
 use spl_token_confidential_transfer_proof_extraction::instruction::ProofLocation;
 use std::mem::size_of;
@@ -60,17 +61,10 @@ pub async fn configure_account_for_confidential_transfers(
 
     let max_pending_balance_credit_counter: u64 = 65536;
 
-    // 6.0.1 AeCiphertext → 4.0 PodAeCiphertext via byte round-trip. Wire
-    // format is identical (36 bytes); we just have two Rust types for it.
+    // 6.0.1 AeCiphertext → 4.0 PodAeCiphertext via byte cast. Wire format is
+    // identical (36 bytes); we just have two Rust types for it.
     let decryptable_balance_v6 = aes_key.encrypt(0u64);
-    let decryptable_balance_bytes = decryptable_balance_v6.to_bytes();
-    let decryptable_balance_legacy =
-        spl_token_2022::solana_zk_sdk::encryption::pod::auth_encryption::PodAeCiphertext::from(
-            spl_token_2022::solana_zk_sdk::encryption::auth_encryption::AeCiphertext::from_bytes(
-                &decryptable_balance_bytes,
-            )
-            .ok_or("legacy PodAeCiphertext decode")?,
-        );
+    let decryptable_balance_legacy = PodAeCiphertextLegacy::from(decryptable_balance_v6.to_bytes());
 
     let proof_data = build_pubkey_validity_proof_data(&elgamal_keypair)
         .map_err(|e| format!("generate pubkey validity proof: {e}"))?;

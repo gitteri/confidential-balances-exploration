@@ -23,16 +23,17 @@ use solana_sdk::{
     pubkey::Pubkey,
     signature::{read_keypair_file, Keypair, Signer},
 };
+use solana_zk_sdk::encryption::{
+    auth_encryption::{AeCiphertext, AeKey},
+    elgamal::{ElGamalCiphertext, ElGamalKeypair},
+};
+use solana_zk_sdk_pod::encryption::elgamal::PodElGamalCiphertext as PodElGamalCiphertextV6;
 use spl_associated_token_account::get_associated_token_address_with_program_id;
 use serde_json;
 use spl_token_2022::{
     extension::{
-        confidential_transfer::ConfidentialTransferAccount,
-        BaseStateWithExtensions, StateWithExtensions,
-    },
-    solana_zk_sdk::encryption::{
-        auth_encryption::AeKey,
-        elgamal::ElGamalKeypair,
+        confidential_transfer::ConfidentialTransferAccount, BaseStateWithExtensions,
+        StateWithExtensions,
     },
     state::Account as TokenAccount,
 };
@@ -106,13 +107,25 @@ fn get_balances(
     let public_balance = account.base.amount;
     println!("\n💵 Public Balance (visible to all): {}", public_balance);
 
-    // 2. Decrypt pending balance (ElGamal encrypted, split into lo/hi)
-    let pending_lo: spl_token_2022::solana_zk_sdk::encryption::elgamal::ElGamalCiphertext =
-        ct_extension.pending_balance_lo.try_into()
-            .map_err(|_| "Failed to convert pending_balance_lo")?;
-    let pending_hi: spl_token_2022::solana_zk_sdk::encryption::elgamal::ElGamalCiphertext =
-        ct_extension.pending_balance_hi.try_into()
-            .map_err(|_| "Failed to convert pending_balance_hi")?;
+    // 2. Decrypt pending balance (ElGamal encrypted, split into lo/hi).
+    //    The on-chain ciphertexts are 4.0 PODs; byte-cast to 6.0.1 PODs for
+    //    decryption with our 6.0.1 ElGamal key.
+    let pending_lo_pod = PodElGamalCiphertextV6(
+        bytemuck::bytes_of(&ct_extension.pending_balance_lo)
+            .try_into()
+            .map_err(|_| "pending_balance_lo size")?,
+    );
+    let pending_hi_pod = PodElGamalCiphertextV6(
+        bytemuck::bytes_of(&ct_extension.pending_balance_hi)
+            .try_into()
+            .map_err(|_| "pending_balance_hi size")?,
+    );
+    let pending_lo: ElGamalCiphertext = pending_lo_pod
+        .try_into()
+        .map_err(|e| format!("decode pending_lo: {e:?}"))?;
+    let pending_hi: ElGamalCiphertext = pending_hi_pod
+        .try_into()
+        .map_err(|e| format!("decode pending_hi: {e:?}"))?;
 
     let pending_lo_amount = pending_lo.decrypt_u32(elgamal_keypair.secret())
         .ok_or("Failed to decrypt pending_balance_lo")?;
@@ -127,18 +140,25 @@ fn get_balances(
     println!("   High bits: {} (decrypted with ElGamal secret key)", pending_hi_amount);
     println!("   Combined:  {}", pending_total);
 
-    // 3. Decrypt available balance (ElGamal encrypted)
-    let available_balance_elgamal: spl_token_2022::solana_zk_sdk::encryption::elgamal::ElGamalCiphertext =
-        ct_extension.available_balance.try_into()
-            .map_err(|_| "Failed to convert available_balance")?;
+    // 3. Decrypt available balance (ElGamal encrypted).
+    let available_pod = PodElGamalCiphertextV6(
+        bytemuck::bytes_of(&ct_extension.available_balance)
+            .try_into()
+            .map_err(|_| "available_balance size")?,
+    );
+    let available_balance_elgamal: ElGamalCiphertext = available_pod
+        .try_into()
+        .map_err(|e| format!("decode available_balance: {e:?}"))?;
 
     let available_elgamal = available_balance_elgamal.decrypt_u32(elgamal_keypair.secret())
         .ok_or("Failed to decrypt available_balance with ElGamal")?;
 
-    // 4. Also decrypt using the AES-encrypted decryptable balance (faster for owner)
-    let decryptable_balance: spl_token_2022::solana_zk_sdk::encryption::auth_encryption::AeCiphertext =
-        ct_extension.decryptable_available_balance.try_into()
-            .map_err(|_| "Failed to convert decryptable_available_balance")?;
+    // 4. Also decrypt using the AES-encrypted decryptable balance (cheaper).
+    let decryptable_bytes: [u8; 36] = bytemuck::bytes_of(&ct_extension.decryptable_available_balance)
+        .try_into()
+        .map_err(|_| "decryptable_available_balance size")?;
+    let decryptable_balance =
+        AeCiphertext::from_bytes(&decryptable_bytes).ok_or("decode AeCiphertext")?;
 
     let available_aes = aes_key.decrypt(&decryptable_balance)
         .ok_or("Failed to decrypt decryptable_available_balance with AES")?;
