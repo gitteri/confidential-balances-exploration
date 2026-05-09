@@ -1,5 +1,5 @@
 target/
 test-ledger/
 .env
-.env.*
-src/bin/
+.env.local
+.env*.local
