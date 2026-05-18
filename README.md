@@ -56,7 +56,9 @@ Confidential transfers require zero-knowledge proofs verified by a dedicated Sol
 │   ├── deposit.rs                  # Deposit from public to confidential
 │   ├── apply_pending.rs            # Apply pending to available balance
 │   ├── withdraw.rs                 # Withdraw from confidential to public
-│   └── transfer.rs                 # Confidential transfer between accounts
+│   ├── transfer.rs                 # Confidential transfer between accounts
+│   └── bin/
+│       └── demo-server.rs          # HTTP API wrapping the modules (used by the slide-deck demo)
 ├── examples/
 │   ├── run_transfer.rs             # End-to-end transfer with balance display
 │   └── get_balances.rs             # Query and decrypt all balance types
@@ -80,20 +82,52 @@ Confidential transfers require zero-knowledge proofs verified by a dedicated Sol
 ### Rust Crates
 
 ```toml
-# Solana core
+# Solana core. zk-sdk is at 6.0.1 because the deployed devnet ZK ElGamal Proof
+# program now expects 6.0.1-format proofs.
 solana-sdk = "3.0.0"
 solana-client = "3.1.6"
-solana-zk-sdk = "5.0.0"
+solana-zk-sdk = "6.0.1"
 
-# SPL Token-2022
+# SPL Token-2022. proof-extraction stays at 0.5.1 (matches spl-token-2022's
+# transitive zk-sdk 4.0) so we can name the legacy `ProofLocation` type at the
+# instruction boundary. proof-generation is on 0.6.0 (zk-sdk 6.0.1) for the
+# actual proof bytes.
 spl-token-2022 = "10.0.0"
 spl-token-client = "0.18.0"
 spl-associated-token-account = "8.0.0"
-
-# Confidential Transfer Proof Generation
-spl-token-confidential-transfer-proof-generation = "0.5.1"
+spl-token-confidential-transfer-proof-generation = "0.6.0"
 spl-token-confidential-transfer-proof-extraction = "0.5.1"
+
+# Bypass-mode helpers (see "Bypass mode" below)
+solana-zk-elgamal-proof-interface = "0.1.2"
+solana-zk-sdk-pod = "0.1.1"
+solana-address = "2.6"
+bytemuck = "1.25"
 ```
+
+### Bypass mode (the 4.0 ↔ 6.0.1 boundary)
+
+This split is a **stopgap, not a design choice**. `spl-token-client` and
+`spl-token-2022` should be on the agave v4 beta / rc crates (which target
+`solana-zk-sdk = 6.0.1` natively), but those Agave v4 crates haven't been
+published yet. Until they are, `spl-token-2022 = 10.0.0` transitively pulls
+`solana-zk-sdk = 4.0` for its public API while the deployed ZK ElGamal Proof
+program on devnet verifies 6.0.1-format proofs. This repo bridges the gap:
+
+1. Derive ElGamal + AES keys with `solana-zk-sdk = 6.0.1` directly.
+2. Generate proofs with `proof-generation = 0.6.0`.
+3. Pre-verify each proof into a `ProofContextState` account.
+4. Reference those accounts in spl-token-2022's instruction builders via
+   `ProofLocation::ContextStateAccount` — a phantom-typed `Pubkey` that
+   carries no proof bytes, so the version mismatch never crosses the FFI.
+5. Cross the type boundary only at on-chain PODs (ElGamal pubkey/ciphertext,
+   AES ciphertext) using zero-copy byte casts, since their wire format is
+   identical between 4.0 and 6.0.1.
+
+Every module in `src/` follows this pattern; `*Legacy` aliases mark the
+4.0 side of the boundary. Once the v4 crates are published, the bypass and
+the `*Legacy` aliases can be deleted and everything routes through 6.0.1
+directly.
 
 ## Quick Start
 
@@ -149,6 +183,47 @@ All operations are tested in `tests/integration_test.rs` with complete end-to-en
 curl -sSf https://raw.githubusercontent.com/solana-program/token-2022/main/clients/cli/examples/confidential-transfer.sh | bash
 ```
 
+### Demo server (for the zkproof8 slide deck)
+
+The `demo-server` binary wraps the modules above in a small HTTP API so a webapp
+deck can drive a live confidential transfer on stage. Single-tenant, in-memory,
+all keypairs in `.env`.
+
+It's the backend for the **zkproof8 talk** slide deck:
+[gitteri/zkproof8-talk](https://github.com/gitteri/zkproof8-talk/) — the
+webapp there calls these endpoints to drive the live transfer.
+
+**One-time setup:**
+
+```bash
+# Generate a fresh .env with five keypairs (PAYER / MINT / SENDER / RECEIVER / AUDITOR)
+cargo run --bin demo-server -- generate-env > .env
+
+# The output prints PAYER pubkey to stderr — fund it.
+solana airdrop 5 <PAYER_PUBKEY> --url https://api.devnet.solana.com
+```
+
+**Run the server:**
+
+```bash
+cargo run --bin demo-server
+# listens on http://localhost:8088
+```
+
+**Endpoints:**
+
+| Method | Path                  | Body                              | Notes                                                        |
+| ------ | --------------------- | --------------------------------- | ------------------------------------------------------------ |
+| GET    | `/demo/health`        |                                   | `{ ok, validator_reachable, mint, port, rpc_url }`           |
+| GET    | `/demo/state`         |                                   | full ledger snapshot for the four-column slide               |
+| POST   | `/demo/init`          |                                   | idempotent: mint if missing, configure ATAs, top up sender   |
+| POST   | `/demo/transfer`      | `{ "amount_ui": 250000 }` opt.    | runs the full confidential transfer flow                     |
+| POST   | `/demo/apply-pending` | `{ "account": "sender"\|"receiver" }` | moves pending balance to available                       |
+
+`SOLANA_RPC_URL` selects devnet or local (`surfpool`, etc). All demo state
+resets when keypairs in `.env` are rotated; soft reset on devnet just re-runs
+`/demo/init`.
+
 ## Core Operations Flow
 
 ```
@@ -203,12 +278,24 @@ Each confidential token account has two encryption keys derived from the owner's
 | **Ciphertext Validity** | Proves ciphertexts are properly generated | Small |
 | **Range Proof** | Proves value is in range [0, u64::MAX] | Large |
 
-**Proof Context State Accounts**: To avoid transaction size limitations, proofs can be stored in temporary on-chain accounts and referenced by the transfer instruction. The implementation in `src/transfer.rs` automatically:
-1. Creates proof context state accounts for all three proof types
-2. Executes the transfer referencing those accounts
-3. Closes the proof accounts to reclaim rent
+**Proof Context State Accounts**: To avoid transaction size limitations, each
+proof is pre-verified into a temporary on-chain account and the transfer
+instruction references it via `ProofLocation::ContextStateAccount`. The
+implementation in `src/transfer.rs` packs the full flow into **3
+transactions**:
 
-This approach allows transfers of any amount without hitting Solana's transaction size limit.
+1. **Tx 1**: create all three proof accounts (equality / validity / range)
+   and verify the **validity** proof.
+2. **Tx 2**: verify the **range** proof on its own — ~1006-byte ix, the
+   binding constraint on transaction size.
+3. **Tx 3**: verify the **equality** proof, run `inner_transfer`, and close
+   all three proof accounts to reclaim rent.
+
+The proof accounts use the **payer** (not the sender) as the context-state
+authority. This keeps the sender out of the verify txs' `account_keys`,
+saving 32 bytes per tx — the difference between fitting and overflowing the
+1232-byte legacy tx-size limit on the range-verify tx. The sender still
+signs Tx 3 because it's the transfer's token-account authority.
 
 ## Resources
 

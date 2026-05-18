@@ -9,17 +9,22 @@ This document covers the Rust crates used for Solana Confidential Balances.
 # Solana Core
 solana-sdk = "3.0.0"
 solana-client = "3.1.6"
-solana-zk-sdk = "5.0.0"
+solana-zk-sdk = "6.0.1"  # matches the deployed devnet ZK ElGamal Proof program
 
 # SPL Token-2022
-spl-token-2022 = "10.0.0"
+spl-token-2022 = "10.0.0"  # still uses zk-sdk 4.0 transitively
 spl-token-client = "0.18.0"
 spl-associated-token-account = "8.0.0"
 
 # Confidential Transfer Proof Generation
-spl-token-confidential-transfer-proof-generation = "0.5.1"
-spl-token-confidential-transfer-proof-extraction = "0.5.1"
+spl-token-confidential-transfer-proof-generation = "0.6.0"   # zk-sdk 6.0.1
+spl-token-confidential-transfer-proof-extraction = "0.5.1"   # zk-sdk 4.0, for the legacy ProofLocation type
 ```
+
+> The 4.0 ↔ 6.0.1 split is a stopgap until the agave v4 beta / rc crates of
+> `spl-token-client` and `spl-token-2022` are published. See the **Bypass
+> mode** section in the top-level README for how the boundary is bridged in
+> the meantime.
 
 ## solana-zk-sdk
 
