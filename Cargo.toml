@@ -33,6 +33,9 @@ solana-zk-elgamal-proof-interface = "0.1.2"
 solana-zk-sdk-pod = "0.1.1"
 solana-address = "2.6"
 bytemuck = "1.25"
+# Record program: stages the oversized range proof off-tx so the verify ix
+# fits, via encode_verify_proof_from_account.
+spl-record = { version = "0.4.0", features = ["no-entrypoint"] }
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }

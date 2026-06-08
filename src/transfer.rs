@@ -59,6 +59,17 @@ use std::mem::size_of;
 const ZK_PROOF_PROGRAM_ID: Pubkey =
     solana_sdk::pubkey!("ZkE1Gama1Proof11111111111111111111111111111");
 
+/// Byte offset of the proof data inside an spl-record account
+/// (`RecordData::WRITABLE_START_INDEX`: 1-byte version + 32-byte authority).
+const RECORD_PROOF_OFFSET: u32 = 33;
+
+/// Per-tx write payloads for staging the proof into a record account, sized to
+/// stay under the 1232-byte tx limit. The first write also carries
+/// create_account + initialize, so it gets a smaller budget; the final write
+/// also carries the context create + verify-from-account, which it has room for.
+const RECORD_FIRST_CHUNK: usize = 750;
+const RECORD_WRITE_CHUNK: usize = 900;
+
 #[allow(clippy::too_many_arguments)]
 pub async fn transfer_confidential(
     client: &RpcClient,
@@ -196,10 +207,13 @@ pub async fn transfer_confidential_with_progress(
             }),
             &proof_data.equality_proof_data,
         );
+    // sender is the context-state authority but verify_proof records it as a
+    // readonly non-signer; only payer (fee + create funder) and the new
+    // proof account itself must sign.
     let sig = send_tx(
         client,
         &[equality_create_ix, equality_verify_ix],
-        &[payer, sender, &equality_account],
+        &[payer, &equality_account],
         &payer.pubkey(),
     )?;
     sig_event("equality-proof-account", &sig);
@@ -230,14 +244,19 @@ pub async fn transfer_confidential_with_progress(
     let sig = send_tx(
         client,
         &[validity_create_ix, validity_verify_ix],
-        &[payer, sender, &validity_account],
+        &[payer, &validity_account],
         &payer.pubkey(),
     )?;
     sig_event("ciphertext-validity-proof-account", &sig);
     signatures.push(sig);
 
-    // 3. Range proof — heavier, give it a beefier compute budget. Submit it
-    // as a one-tx create+verify; the on-chain cost is dominated by ZK verify.
+    // 3. Range proof — the inline U128 range proof (~1.4 KB) blows past the
+    // 1232-byte tx limit even on its own, so it can't ride in a verify ix.
+    // Stage it in an spl-record account, then verify *from* that account
+    // (encode_verify_proof_from_account) so the verify ix carries only account
+    // references. The context-account create + verify-from-account are appended
+    // to the final record write so they don't cost an extra transaction.
+    let record_account = Keypair::new();
     let range_account = Keypair::new();
     let range_size = size_of::<ProofContextState<BatchedRangeProofContext>>();
     let range_rent = client.get_minimum_balance_for_rent_exemption(range_size)?;
@@ -248,23 +267,29 @@ pub async fn transfer_confidential_with_progress(
         range_size as u64,
         &ZK_PROOF_PROGRAM_ID,
     );
-    let range_verify_ix = ProofInstruction::VerifyBatchedRangeProofU128.encode_verify_proof(
-        Some(ContextStateInfo {
-            context_state_account: &Address::from(range_account.pubkey().to_bytes()),
-            context_state_authority: &Address::from(sender.pubkey().to_bytes()),
-        }),
-        &proof_data.range_proof_data,
-    );
-    let sig = send_tx(
+    let range_verify_ix = ProofInstruction::VerifyBatchedRangeProofU128
+        .encode_verify_proof_from_account(
+            Some(ContextStateInfo {
+                context_state_account: &Address::from(range_account.pubkey().to_bytes()),
+                context_state_authority: &Address::from(sender.pubkey().to_bytes()),
+            }),
+            &Address::from(record_account.pubkey().to_bytes()),
+            RECORD_PROOF_OFFSET,
+        );
+    let mut record_sigs = stage_range_proof_record(
         client,
+        payer,
+        &record_account,
+        bytemuck::bytes_of(&proof_data.range_proof_data),
         &[range_create_ix, range_verify_ix],
-        &[payer, sender, &range_account],
-        &payer.pubkey(),
+        &[&range_account],
     )?;
-    sig_event("range-proof-account", &sig);
-    signatures.push(sig);
+    for (i, sig) in record_sigs.iter().enumerate() {
+        sig_event(&format!("range-proof-stage-{}", i + 1), sig);
+    }
+    signatures.append(&mut record_sigs);
 
-    phase("submit-transfer", "Submitting confidential transfer instruction");
+    phase("submit-transfer", "Submitting confidential transfer and closing proof accounts");
 
     // New decryptable available balance for the sender (post-transfer).
     let current_avail_plaintext = current_decryptable_v6
@@ -310,31 +335,34 @@ pub async fn transfer_confidential_with_progress(
         range_loc,
     )?;
 
-    let sig = send_tx(client, &[transfer_ix], &[payer, sender], &payer.pubkey())?;
-    sig_event("transfer", &sig);
-    signatures.push(sig);
-
-    phase(
-        "close-proof-accounts",
-        "Closing proof context state accounts and reclaiming rent",
-    );
-
-    for (account, label) in [
-        (&equality_account, "close-equality-proof-account"),
-        (&validity_account, "close-ciphertext-validity-proof-account"),
-        (&range_account, "close-range-proof-account"),
-    ] {
-        let close_ix = close_context_state(
+    // Close all three proof context accounts and the record account in the same
+    // transaction as the transfer: the transfer consumes the verified proofs,
+    // then the closes reclaim rent. Saves four standalone transactions.
+    let payer_addr = Address::from(payer.pubkey().to_bytes());
+    let sender_addr = Address::from(sender.pubkey().to_bytes());
+    let close_ctx = |ctx: &Pubkey| {
+        close_context_state(
             ContextStateInfo {
-                context_state_account: &Address::from(account.pubkey().to_bytes()),
-                context_state_authority: &Address::from(sender.pubkey().to_bytes()),
+                context_state_account: &Address::from(ctx.to_bytes()),
+                context_state_authority: &sender_addr,
             },
-            &Address::from(payer.pubkey().to_bytes()),
-        );
-        let sig = send_tx(client, &[close_ix], &[payer, sender], &payer.pubkey())?;
-        sig_event(label, &sig);
-        signatures.push(sig);
-    }
+            &payer_addr,
+        )
+    };
+    let ixs = [
+        transfer_ix,
+        close_ctx(&equality_account.pubkey()),
+        close_ctx(&validity_account.pubkey()),
+        close_ctx(&range_account.pubkey()),
+        spl_record::instruction::close_account(
+            &record_account.pubkey(),
+            &payer.pubkey(),
+            &payer.pubkey(),
+        ),
+    ];
+    let sig = send_tx(client, &ixs, &[payer, sender], &payer.pubkey())?;
+    sig_event("transfer-and-close", &sig);
+    signatures.push(sig);
 
     emit(
         progress,
@@ -352,6 +380,85 @@ pub async fn transfer_confidential_with_progress(
 // ----------------------------------------------------------------------------
 // Helpers
 // ----------------------------------------------------------------------------
+
+/// Create an spl-record account owned by `payer` (as record authority) and
+/// write `proof_bytes` into it in tx-sized chunks. The first tx allocates +
+/// initializes + writes the first chunk; subsequent chunks are write-only.
+/// `trailing_ixs` (with `trailing_signers`) are appended to the final write tx
+/// so the caller's create-context + verify-from-account ride along for free.
+/// Returns one signature per transaction sent.
+fn stage_range_proof_record(
+    client: &RpcClient,
+    payer: &dyn Signer,
+    record_account: &Keypair,
+    proof_bytes: &[u8],
+    trailing_ixs: &[solana_sdk::instruction::Instruction],
+    trailing_signers: &[&dyn Signer],
+) -> CtResult<Vec<Signature>> {
+    let space = proof_bytes.len() + RECORD_PROOF_OFFSET as usize;
+    let rent = client.get_minimum_balance_for_rent_exemption(space)?;
+
+    if proof_bytes.is_empty() {
+        return Err("range proof had no bytes to stage".into());
+    }
+
+    // First chunk is smaller to leave room for create_account + initialize.
+    let first_len = proof_bytes.len().min(RECORD_FIRST_CHUNK);
+    let (first, rest) = proof_bytes.split_at(first_len);
+
+    let mut sigs = Vec::new();
+    let mut offset = 0usize;
+
+    // tx 1: create + initialize + write the first chunk. We never append the
+    // trailing ixs here (create_account + initialize already make this tx the
+    // heaviest), so it can't overflow on a large single-chunk proof.
+    sigs.push(send_tx(
+        client,
+        &[
+            system_instruction::create_account(
+                &payer.pubkey(),
+                &record_account.pubkey(),
+                rent,
+                space as u64,
+                &spl_record::id(),
+            ),
+            spl_record::instruction::initialize(&record_account.pubkey(), &payer.pubkey()),
+            spl_record::instruction::write(&record_account.pubkey(), &payer.pubkey(), 0, first),
+        ],
+        &[payer, record_account],
+        &payer.pubkey(),
+    )?);
+    offset += first.len();
+
+    // Remaining chunks are write-only; the trailing ixs ride the last one.
+    let mut chunks = rest.chunks(RECORD_WRITE_CHUNK).peekable();
+    let mut trailing_attached = false;
+    while let Some(chunk) = chunks.next() {
+        let mut ixs = vec![spl_record::instruction::write(
+            &record_account.pubkey(),
+            &payer.pubkey(),
+            offset as u64,
+            chunk,
+        )];
+        let mut signers: Vec<&dyn Signer> = vec![payer];
+        if chunks.peek().is_none() {
+            ixs.extend_from_slice(trailing_ixs);
+            signers.extend_from_slice(trailing_signers);
+            trailing_attached = true;
+        }
+        sigs.push(send_tx(client, &ixs, &signers, &payer.pubkey())?);
+        offset += chunk.len();
+    }
+
+    // Single-chunk proof: no write-only tx existed to carry the trailing ixs.
+    if !trailing_attached {
+        let mut signers: Vec<&dyn Signer> = vec![payer];
+        signers.extend_from_slice(trailing_signers);
+        sigs.push(send_tx(client, trailing_ixs, &signers, &payer.pubkey())?);
+    }
+
+    Ok(sigs)
+}
 
 /// Send a single tx, return the signature.
 fn send_tx(
