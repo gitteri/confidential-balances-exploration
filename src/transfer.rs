@@ -1,11 +1,10 @@
-//! Confidential transfer between accounts (bypass mode).
+//! Confidential transfer between accounts.
 //!
 //! Generates the three transfer proofs (equality, ciphertext-validity, range)
-//! using `spl-token-confidential-transfer-proof-generation = 0.6.0`
-//! (`solana-zk-sdk = 6.0.1`), pre-verifies each into a context state account,
-//! then references those accounts in `spl-token-2022 = 10.0.0`'s transfer ix
-//! via `ProofLocation::ContextStateAccount`. The 4.0 ↔ 6.0.1 boundary is
-//! crossed by zero-copy byte casts of POD types.
+//! with `spl-token-confidential-transfer-proof-generation = 0.6.0`
+//! (solana-zk-sdk 6.0.1), pre-verifies each into a context state account, then
+//! references those accounts in spl-token-2022 11.0.0's transfer ix via
+//! `ProofLocation::ContextStateAccount`.
 
 use crate::types::*;
 use solana_address::Address;
@@ -28,9 +27,7 @@ use solana_zk_sdk::encryption::{
     auth_encryption::{AeCiphertext, AeKey},
     elgamal::{ElGamalCiphertext, ElGamalKeypair, ElGamalPubkey},
 };
-use solana_zk_sdk_pod::encryption::elgamal::{
-    PodElGamalCiphertext as PodElGamalCiphertextV6, PodElGamalPubkey as PodElGamalPubkeyV6,
-};
+use solana_zk_sdk_pod::encryption::{auth_encryption::PodAeCiphertext, elgamal::PodElGamalPubkey};
 use spl_associated_token_account::get_associated_token_address_with_program_id;
 use spl_token_2022::{
     extension::{
@@ -42,13 +39,6 @@ use spl_token_2022::{
             ConfidentialTransferAccount, ConfidentialTransferMint,
         },
         BaseStateWithExtensions, StateWithExtensions,
-    },
-    solana_zk_sdk::encryption::pod::{
-        auth_encryption::PodAeCiphertext as PodAeCiphertextLegacy,
-        elgamal::{
-            PodElGamalCiphertext as PodElGamalCiphertextLegacy,
-            PodElGamalPubkey as PodElGamalPubkeyLegacy,
-        },
     },
     state::{Account as TokenAccount, Mint},
 };
@@ -110,29 +100,25 @@ pub async fn transfer_confidential_with_progress(
     let recipient_token_account =
         get_associated_token_address_with_program_id(recipient, mint, &spl_token_2022::id());
 
-    // ----- Recipient ElGamal pubkey (legacy → 6.0.1 byte-cast) -----
+    // ----- Recipient ElGamal pubkey -----
     let recipient_acc_data = client.get_account(&recipient_token_account)?;
     let recipient_acc = StateWithExtensions::<TokenAccount>::unpack(&recipient_acc_data.data)?;
     let recipient_ext = recipient_acc.get_extension::<ConfidentialTransferAccount>()?;
-    let recipient_elgamal_pubkey: ElGamalPubkey =
-        cast_elgamal_pubkey_legacy_to_v6(&recipient_ext.elgamal_pubkey)?
-            .try_into()
-            .map_err(|e| format!("recipient ElGamal pubkey: {e:?}"))?;
+    let recipient_elgamal_pubkey: ElGamalPubkey = recipient_ext
+        .elgamal_pubkey
+        .try_into()
+        .map_err(|e| format!("recipient ElGamal pubkey: {e:?}"))?;
 
     // ----- Auditor ElGamal pubkey (optional) -----
     let mint_acc_data = client.get_account(mint)?;
     let mint_acc = StateWithExtensions::<Mint>::unpack(&mint_acc_data.data)?;
     let mint_ext = mint_acc.get_extension::<ConfidentialTransferMint>()?;
-    let auditor_elgamal_pubkey: Option<ElGamalPubkey> = {
-        let pod_opt: Option<PodElGamalPubkeyLegacy> = mint_ext.auditor_elgamal_pubkey.into();
-        pod_opt
-            .map(|pod| -> CtResult<ElGamalPubkey> {
-                let v6 = cast_elgamal_pubkey_legacy_to_v6(&pod)?;
-                v6.try_into()
-                    .map_err(|e| format!("auditor ElGamal pubkey: {e:?}").into())
+    let auditor_elgamal_pubkey: Option<ElGamalPubkey> =
+        Option::<PodElGamalPubkey>::from(mint_ext.auditor_elgamal_pubkey)
+            .map(|pod| {
+                ElGamalPubkey::try_from(pod).map_err(|e| format!("auditor ElGamal pubkey: {e:?}"))
             })
-            .transpose()?
-    };
+            .transpose()?;
 
     phase(
         "derive-keys",
@@ -148,20 +134,22 @@ pub async fn transfer_confidential_with_progress(
     let sender_acc = StateWithExtensions::<TokenAccount>::unpack(&sender_acc_data.data)?;
     let sender_ext = sender_acc.get_extension::<ConfidentialTransferAccount>()?;
 
-    let current_available_v6: ElGamalCiphertext =
-        cast_elgamal_ciphertext_legacy_to_v6(&sender_ext.available_balance)?
-            .try_into()
-            .map_err(|e| format!("sender available balance: {e:?}"))?;
-    let current_decryptable_v6: AeCiphertext =
-        cast_ae_ciphertext_legacy_to_v6(&sender_ext.decryptable_available_balance)?;
+    let current_available: ElGamalCiphertext = sender_ext
+        .available_balance
+        .try_into()
+        .map_err(|e| format!("sender available balance: {e:?}"))?;
+    let current_decryptable: AeCiphertext = sender_ext
+        .decryptable_available_balance
+        .try_into()
+        .map_err(|e| format!("sender decryptable balance: {e:?}"))?;
 
     phase(
         "generate-proofs",
         "Generating equality, ciphertext-validity, and range proofs (zk-sdk 6.0.1)",
     );
     let proof_data = transfer_split_proof_data(
-        &current_available_v6,
-        &current_decryptable_v6,
+        &current_available,
+        &current_decryptable,
         amount,
         &sender_elgamal,
         &sender_aes,
@@ -172,15 +160,25 @@ pub async fn transfer_confidential_with_progress(
 
     phase(
         "create-proof-accounts",
-        "Allocating + verifying 3 proof context state accounts (3 transactions)",
+        "Allocating + verifying 3 proof context state accounts",
     );
 
     let mut signatures: Vec<Signature> = Vec::new();
 
-    // 1. Equality proof
+    // Build all three proof accounts up front so we can batch where possible.
     let equality_account = Keypair::new();
+    let validity_account = Keypair::new();
+    let range_account = Keypair::new();
+
     let equality_size = size_of::<ProofContextState<CiphertextCommitmentEqualityProofContext>>();
+    let validity_size =
+        size_of::<ProofContextState<BatchedGroupedCiphertext3HandlesValidityProofContext>>();
+    let range_size = size_of::<ProofContextState<BatchedRangeProofContext>>();
+
     let equality_rent = client.get_minimum_balance_for_rent_exemption(equality_size)?;
+    let validity_rent = client.get_minimum_balance_for_rent_exemption(validity_size)?;
+    let range_rent = client.get_minimum_balance_for_rent_exemption(range_size)?;
+
     let equality_create_ix = system_instruction::create_account(
         &payer.pubkey(),
         &equality_account.pubkey(),
@@ -188,28 +186,6 @@ pub async fn transfer_confidential_with_progress(
         equality_size as u64,
         &ZK_PROOF_PROGRAM_ID,
     );
-    let equality_verify_ix = ProofInstruction::VerifyCiphertextCommitmentEquality
-        .encode_verify_proof(
-            Some(ContextStateInfo {
-                context_state_account: &Address::from(equality_account.pubkey().to_bytes()),
-                context_state_authority: &Address::from(sender.pubkey().to_bytes()),
-            }),
-            &proof_data.equality_proof_data,
-        );
-    let sig = send_tx(
-        client,
-        &[equality_create_ix, equality_verify_ix],
-        &[payer, sender, &equality_account],
-        &payer.pubkey(),
-    )?;
-    sig_event("equality-proof-account", &sig);
-    signatures.push(sig);
-
-    // 2. Ciphertext validity proof
-    let validity_account = Keypair::new();
-    let validity_size =
-        size_of::<ProofContextState<BatchedGroupedCiphertext3HandlesValidityProofContext>>();
-    let validity_rent = client.get_minimum_balance_for_rent_exemption(validity_size)?;
     let validity_create_ix = system_instruction::create_account(
         &payer.pubkey(),
         &validity_account.pubkey(),
@@ -217,30 +193,6 @@ pub async fn transfer_confidential_with_progress(
         validity_size as u64,
         &ZK_PROOF_PROGRAM_ID,
     );
-    let validity_verify_ix = ProofInstruction::VerifyBatchedGroupedCiphertext3HandlesValidity
-        .encode_verify_proof(
-            Some(ContextStateInfo {
-                context_state_account: &Address::from(validity_account.pubkey().to_bytes()),
-                context_state_authority: &Address::from(sender.pubkey().to_bytes()),
-            }),
-            &proof_data
-                .ciphertext_validity_proof_data_with_ciphertext
-                .proof_data,
-        );
-    let sig = send_tx(
-        client,
-        &[validity_create_ix, validity_verify_ix],
-        &[payer, sender, &validity_account],
-        &payer.pubkey(),
-    )?;
-    sig_event("ciphertext-validity-proof-account", &sig);
-    signatures.push(sig);
-
-    // 3. Range proof — heavier, give it a beefier compute budget. Submit it
-    // as a one-tx create+verify; the on-chain cost is dominated by ZK verify.
-    let range_account = Keypair::new();
-    let range_size = size_of::<ProofContextState<BatchedRangeProofContext>>();
-    let range_rent = client.get_minimum_balance_for_rent_exemption(range_size)?;
     let range_create_ix = system_instruction::create_account(
         &payer.pubkey(),
         &range_account.pubkey(),
@@ -248,45 +200,81 @@ pub async fn transfer_confidential_with_progress(
         range_size as u64,
         &ZK_PROOF_PROGRAM_ID,
     );
+
+    // Use payer (not sender) as the context-state authority on all three
+    // proof accounts. This keeps sender out of the verify txs' account_keys
+    // — saves 32 bytes per tx, which is the difference between fitting and
+    // overflowing the 1232-byte legacy size limit on `range_verify`. Closes
+    // are then signed by payer too.
+    let payer_addr: Address = payer.pubkey().to_bytes().into();
+    let equality_verify_ix = ProofInstruction::VerifyCiphertextCommitmentEquality
+        .encode_verify_proof(
+            Some(ContextStateInfo {
+                context_state_account: &Address::from(equality_account.pubkey().to_bytes()),
+                context_state_authority: &payer_addr,
+            }),
+            &proof_data.equality_proof_data,
+        );
+    let validity_verify_ix = ProofInstruction::VerifyBatchedGroupedCiphertext3HandlesValidity
+        .encode_verify_proof(
+            Some(ContextStateInfo {
+                context_state_account: &Address::from(validity_account.pubkey().to_bytes()),
+                context_state_authority: &payer_addr,
+            }),
+            &proof_data
+                .ciphertext_validity_proof_data_with_ciphertext
+                .proof_data,
+        );
     let range_verify_ix = ProofInstruction::VerifyBatchedRangeProofU128.encode_verify_proof(
         Some(ContextStateInfo {
             context_state_account: &Address::from(range_account.pubkey().to_bytes()),
-            context_state_authority: &Address::from(sender.pubkey().to_bytes()),
+            context_state_authority: &payer_addr,
         }),
         &proof_data.range_proof_data,
     );
+
+    // Tx 1: create all 3 proof accounts + verify the validity proof. The
+    // validity proof's context data is the largest of eq/val (~544 vs ~320),
+    // so it pairs with the small creates here; equality goes alongside the
+    // transfer below where there's headroom.
     let sig = send_tx(
         client,
-        &[range_create_ix, range_verify_ix],
-        &[payer, sender, &range_account],
+        &[
+            equality_create_ix,
+            validity_create_ix,
+            range_create_ix,
+            validity_verify_ix,
+        ],
+        &[payer, &equality_account, &validity_account, &range_account],
         &payer.pubkey(),
     )?;
-    sig_event("range-proof-account", &sig);
+    sig_event("create-proof-accounts+verify-validity", &sig);
+    signatures.push(sig);
+
+    // Tx 2: verify the range proof on its own. ~1006-byte verify ix; with
+    // payer as authority and 3 account keys, lands at ~1206 bytes — under
+    // Solana's 1232-byte legacy size limit, but only just.
+    let sig = send_tx(client, &[range_verify_ix], &[payer], &payer.pubkey())?;
+    sig_event("range-proof-account-verify", &sig);
     signatures.push(sig);
 
     phase("submit-transfer", "Submitting confidential transfer instruction");
 
     // New decryptable available balance for the sender (post-transfer).
-    let current_avail_plaintext = current_decryptable_v6
+    let current_avail_plaintext = current_decryptable
         .decrypt(&sender_aes)
         .ok_or("decrypt current available")?;
     let new_avail_plaintext = current_avail_plaintext
         .checked_sub(amount)
         .ok_or("insufficient available balance")?;
-    let new_decryptable_v6 = sender_aes.encrypt(new_avail_plaintext);
-    let new_decryptable_legacy: PodAeCiphertextLegacy =
-        cast_ae_ciphertext_v6_to_legacy(&new_decryptable_v6);
+    let new_decryptable: PodAeCiphertext = sender_aes.encrypt(new_avail_plaintext).into();
 
-    let auditor_lo_v6 = proof_data
+    let auditor_lo = proof_data
         .ciphertext_validity_proof_data_with_ciphertext
         .ciphertext_lo;
-    let auditor_hi_v6 = proof_data
+    let auditor_hi = proof_data
         .ciphertext_validity_proof_data_with_ciphertext
         .ciphertext_hi;
-    let auditor_lo_legacy: PodElGamalCiphertextLegacy =
-        cast_elgamal_ciphertext_v6_to_legacy(&auditor_lo_v6);
-    let auditor_hi_legacy: PodElGamalCiphertextLegacy =
-        cast_elgamal_ciphertext_v6_to_legacy(&auditor_hi_v6);
 
     let equality_loc: ProofLocation<CiphertextCommitmentEqualityProofData> =
         ProofLocation::ContextStateAccount(&equality_account.pubkey());
@@ -300,9 +288,9 @@ pub async fn transfer_confidential_with_progress(
         &sender_token_account,
         mint,
         &recipient_token_account,
-        &new_decryptable_legacy,
-        &auditor_lo_legacy,
-        &auditor_hi_legacy,
+        &new_decryptable,
+        &auditor_lo,
+        &auditor_hi,
         &sender.pubkey(),
         &[],
         equality_loc,
@@ -310,31 +298,51 @@ pub async fn transfer_confidential_with_progress(
         range_loc,
     )?;
 
-    let sig = send_tx(client, &[transfer_ix], &[payer, sender], &payer.pubkey())?;
-    sig_event("transfer", &sig);
-    signatures.push(sig);
-
     phase(
-        "close-proof-accounts",
-        "Closing proof context state accounts and reclaiming rent",
+        "verify-eq+transfer+close",
+        "Verifying equality proof, submitting transfer, closing proof accounts",
     );
 
-    for (account, label) in [
-        (&equality_account, "close-equality-proof-account"),
-        (&validity_account, "close-ciphertext-validity-proof-account"),
-        (&range_account, "close-range-proof-account"),
-    ] {
-        let close_ix = close_context_state(
-            ContextStateInfo {
-                context_state_account: &Address::from(account.pubkey().to_bytes()),
-                context_state_authority: &Address::from(sender.pubkey().to_bytes()),
-            },
-            &Address::from(payer.pubkey().to_bytes()),
-        );
-        let sig = send_tx(client, &[close_ix], &[payer, sender], &payer.pubkey())?;
-        sig_event(label, &sig);
-        signatures.push(sig);
-    }
+    // Tx 3: equality verify + transfer + 3 closes. Equality is the smallest
+    // verify (~328-byte ix), and transfer + 3 closes is only ~210 bytes of ix
+    // data, so this all fits in one tx (~1015 bytes). Close ixs use payer as
+    // the context-state authority so only payer signs the closes; sender
+    // still signs because it's the transfer's token-account authority.
+    let close_eq = close_context_state(
+        ContextStateInfo {
+            context_state_account: &Address::from(equality_account.pubkey().to_bytes()),
+            context_state_authority: &payer_addr,
+        },
+        &payer_addr,
+    );
+    let close_val = close_context_state(
+        ContextStateInfo {
+            context_state_account: &Address::from(validity_account.pubkey().to_bytes()),
+            context_state_authority: &payer_addr,
+        },
+        &payer_addr,
+    );
+    let close_range = close_context_state(
+        ContextStateInfo {
+            context_state_account: &Address::from(range_account.pubkey().to_bytes()),
+            context_state_authority: &payer_addr,
+        },
+        &payer_addr,
+    );
+    let sig = send_tx(
+        client,
+        &[
+            equality_verify_ix,
+            transfer_ix,
+            close_eq,
+            close_val,
+            close_range,
+        ],
+        &[payer, sender],
+        &payer.pubkey(),
+    )?;
+    sig_event("verify-eq+transfer+close", &sig);
+    signatures.push(sig);
 
     emit(
         progress,
@@ -363,42 +371,4 @@ fn send_tx(
     let blockhash = client.get_latest_blockhash()?;
     let tx = Transaction::new_signed_with_payer(ixs, Some(payer), signers, blockhash);
     Ok(client.send_and_confirm_transaction(&tx)?)
-}
-
-// Byte-cast helpers across the 4.0 / 6.0.1 boundary. POD wire format is
-// identical for these types; the Rust types are just version-tagged wrappers.
-
-fn cast_elgamal_pubkey_legacy_to_v6(
-    legacy: &PodElGamalPubkeyLegacy,
-) -> CtResult<PodElGamalPubkeyV6> {
-    let bytes: [u8; 32] = bytemuck::bytes_of(legacy)
-        .try_into()
-        .map_err(|_| "PodElGamalPubkey size")?;
-    Ok(PodElGamalPubkeyV6(bytes))
-}
-
-fn cast_elgamal_ciphertext_legacy_to_v6(
-    legacy: &PodElGamalCiphertextLegacy,
-) -> CtResult<PodElGamalCiphertextV6> {
-    let bytes: [u8; 64] = bytemuck::bytes_of(legacy)
-        .try_into()
-        .map_err(|_| "PodElGamalCiphertext size")?;
-    Ok(PodElGamalCiphertextV6(bytes))
-}
-
-fn cast_elgamal_ciphertext_v6_to_legacy(
-    v6: &PodElGamalCiphertextV6,
-) -> PodElGamalCiphertextLegacy {
-    PodElGamalCiphertextLegacy::from(v6.0)
-}
-
-fn cast_ae_ciphertext_legacy_to_v6(legacy: &PodAeCiphertextLegacy) -> CtResult<AeCiphertext> {
-    let bytes: [u8; 36] = bytemuck::bytes_of(legacy)
-        .try_into()
-        .map_err(|_| "PodAeCiphertext size")?;
-    AeCiphertext::from_bytes(&bytes).ok_or_else(|| "decode AeCiphertext bytes".into())
-}
-
-fn cast_ae_ciphertext_v6_to_legacy(v6: &AeCiphertext) -> PodAeCiphertextLegacy {
-    PodAeCiphertextLegacy::from(v6.to_bytes())
 }
