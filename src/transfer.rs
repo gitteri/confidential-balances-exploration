@@ -56,12 +56,12 @@ use spl_token_confidential_transfer_proof_extraction::instruction::ProofLocation
 use spl_token_confidential_transfer_proof_generation::transfer::transfer_split_proof_data;
 use std::mem::size_of;
 
-const ZK_PROOF_PROGRAM_ID: Pubkey =
+pub(crate) const ZK_PROOF_PROGRAM_ID: Pubkey =
     solana_sdk::pubkey!("ZkE1Gama1Proof11111111111111111111111111111");
 
 /// Byte offset of the proof data inside an spl-record account
 /// (`RecordData::WRITABLE_START_INDEX`: 1-byte version + 32-byte authority).
-const RECORD_PROOF_OFFSET: u32 = 33;
+pub(crate) const RECORD_PROOF_OFFSET: u32 = 33;
 
 /// Per-tx write payloads for staging the proof into a record account, sized to
 /// stay under the 1232-byte tx limit. The first write also carries
@@ -387,7 +387,7 @@ pub async fn transfer_confidential_with_progress(
 /// `trailing_ixs` (with `trailing_signers`) are appended to the final write tx
 /// so the caller's create-context + verify-from-account ride along for free.
 /// Returns one signature per transaction sent.
-fn stage_range_proof_record(
+pub(crate) fn stage_range_proof_record(
     client: &RpcClient,
     payer: &dyn Signer,
     record_account: &Keypair,
@@ -461,7 +461,7 @@ fn stage_range_proof_record(
 }
 
 /// Send a single tx, return the signature.
-fn send_tx(
+pub(crate) fn send_tx(
     client: &RpcClient,
     ixs: &[solana_sdk::instruction::Instruction],
     signers: &[&dyn Signer],
@@ -475,7 +475,7 @@ fn send_tx(
 // Byte-cast helpers across the 4.0 / 6.0.1 boundary. POD wire format is
 // identical for these types; the Rust types are just version-tagged wrappers.
 
-fn cast_elgamal_pubkey_legacy_to_v6(
+pub(crate) fn cast_elgamal_pubkey_legacy_to_v6(
     legacy: &PodElGamalPubkeyLegacy,
 ) -> CtResult<PodElGamalPubkeyV6> {
     let bytes: [u8; 32] = bytemuck::bytes_of(legacy)
@@ -484,7 +484,7 @@ fn cast_elgamal_pubkey_legacy_to_v6(
     Ok(PodElGamalPubkeyV6(bytes))
 }
 
-fn cast_elgamal_ciphertext_legacy_to_v6(
+pub(crate) fn cast_elgamal_ciphertext_legacy_to_v6(
     legacy: &PodElGamalCiphertextLegacy,
 ) -> CtResult<PodElGamalCiphertextV6> {
     let bytes: [u8; 64] = bytemuck::bytes_of(legacy)
@@ -493,19 +493,19 @@ fn cast_elgamal_ciphertext_legacy_to_v6(
     Ok(PodElGamalCiphertextV6(bytes))
 }
 
-fn cast_elgamal_ciphertext_v6_to_legacy(
+pub(crate) fn cast_elgamal_ciphertext_v6_to_legacy(
     v6: &PodElGamalCiphertextV6,
 ) -> PodElGamalCiphertextLegacy {
     PodElGamalCiphertextLegacy::from(v6.0)
 }
 
-fn cast_ae_ciphertext_legacy_to_v6(legacy: &PodAeCiphertextLegacy) -> CtResult<AeCiphertext> {
+pub(crate) fn cast_ae_ciphertext_legacy_to_v6(legacy: &PodAeCiphertextLegacy) -> CtResult<AeCiphertext> {
     let bytes: [u8; 36] = bytemuck::bytes_of(legacy)
         .try_into()
         .map_err(|_| "PodAeCiphertext size")?;
     AeCiphertext::from_bytes(&bytes).ok_or_else(|| "decode AeCiphertext bytes".into())
 }
 
-fn cast_ae_ciphertext_v6_to_legacy(v6: &AeCiphertext) -> PodAeCiphertextLegacy {
+pub(crate) fn cast_ae_ciphertext_v6_to_legacy(v6: &AeCiphertext) -> PodAeCiphertextLegacy {
     PodAeCiphertextLegacy::from(v6.to_bytes())
 }
